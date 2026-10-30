@@ -1,0 +1,7 @@
+# Files that must never be uploaded to GitHub.
+
+# The price data. The nightly job on GitHub creates this folder; it is not kept in the repository.
+site/data/
+
+# Python's own temporary files.
+__pycache__/

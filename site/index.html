@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MACD Signals</title>
+<meta name="description" content="A plain-English view of the MACD momentum indicator for the stocks and funds on your own list. Not financial advice.">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div>
+    <h1>MACD peak / valley dashboard</h1>
+    <div class="sub" id="subtitle">Loading&hellip;</div>
+  </div>
+  <div class="controls">
+    <span class="seg" id="rangesel" title="How much history the sparklines, recent-signal strips, timeline and charts show"></span>
+    <div class="daynav">
+      <button id="prev" title="Previous trading day">&#8592;</button>
+      <select id="daysel" title="Trading day to show"></select>
+      <button id="next" title="Next trading day">&#8594;</button>
+    </div>
+    <button id="editbtn" title="Change the tickers on this page">Edit list</button>
+    <button id="copybtn" title="Copy the address of this page, including your list">Copy link</button>
+    <span class="sub" id="copied" hidden>Link copied</span>
+    <button class="toggle" id="theme" title="Toggle light / dark">&#9681;</button>
+  </div>
+</header>
+
+<div class="banner" id="banner" hidden></div>
+
+<div class="tabs">
+  <button data-tab="dash" class="on">Dashboard</button>
+  <button data-tab="chart">Charts</button>
+  <button data-tab="info">Info</button>
+  <button data-tab="list">My list</button>
+</div>
+
+<div class="status" id="status" hidden></div>
+
+<div id="view-dash">
+<div id="dash-msg" hidden></div>
+<div id="dash-body" hidden>
+<div class="stats" id="stats"></div>
+
+<section>
+  <h2>Holdings: PEAK signals <span class="note">new on the selected day, strongest stage first</span></h2>
+  <div id="peaks"></div>
+</section>
+
+<section>
+  <h2>Near highs, no turn yet <span class="note">holdings within 2% of their 1-year high with RSI 65 or more, no signal and not choppy</span></h2>
+  <div id="nearhigh"></div>
+</section>
+
+<section>
+  <h2>Holdings: VALLEY signals <span class="note">possible bottoming out</span></h2>
+  <div id="valleys"></div>
+</section>
+
+<section>
+  <h2>All holdings <span class="note">click a column header to sort, click a ticker for its chart</span></h2>
+  <div class="scroll" id="holdings"></div>
+  <div class="legend">
+    <span>Histogram and Recent columns cover the selected range (<span id="rangenote"></span>), oldest on the left:</span>
+    <span class="dot p1"></span> peak early <span class="dot p2"></span> peak turned <span class="dot p3"></span> peak confirmed
+    <span class="dot v1"></span> valley early <span class="dot v2"></span> valley turned <span class="dot v3"></span> valley confirmed
+  </div>
+</section>
+
+<section>
+  <h2>Watchlist <span class="note">tickers you do not hold that fired on the selected day, peaks first</span>
+    <label class="note" style="margin-left:auto"><input type="checkbox" id="allwatch"> show all, not just signals</label></h2>
+  <div class="scroll" id="watch"></div>
+</section>
+
+<section>
+  <h2>Signal timeline <span class="note">every listed ticker that fired within the selected range, newest day on the right; hover a cell for details</span></h2>
+  <div class="timeline" id="timeline"></div>
+</section>
+</div>
+</div>
+
+<div id="view-chart" hidden>
+<section>
+  <h2>Price, MACD and RSI <span class="note">one ticker at a time; hover for values. Markers on the MACD line are the days a signal fired.</span></h2>
+  <div class="chart-head" style="margin-bottom:10px">
+    <label class="note">Ticker <select id="chartsym"></select></label>
+    <span class="seg" id="rangesel2"></span>
+    <span class="meta" id="chartmeta"></span>
+  </div>
+  <div class="chartbox" id="chartbox"></div>
+</section>
+</div>
+
+<div id="view-info" hidden>
+<div class="info">
+<div class="box">
+<p><b>What this page is.</b> Once a night, a free automated job downloads a year of daily closing prices for about 800 stocks and funds, runs a momentum indicator called MACD over them, and notes the days when momentum looked like it was topping out (a <b>PEAK</b>) or bottoming out (a <b>VALLEY</b>). This page shows those results for the tickers on your own list, for most trading days of the past year. It describes what the indicators are doing. It does not tell you what to buy or sell, and no indicator can predict prices.</p>
+</div>
+
+<h2>The basics</h2>
+<dl>
+<dt>Ticker / symbol</dt><dd>The short code a stock or fund trades under, like AAPL for Apple or VOO for a Vanguard S&amp;P 500 fund. BRK-B is Berkshire Hathaway class B shares.</dd>
+<dt>Close</dt><dd>The last price of the trading day. Everything here is computed from daily closes only.</dd>
+<dt>Trading day / bar</dt><dd>One day the market was open. "Bars" is chart jargon for one day's data. Weekends and holidays are skipped, so 5 bars is one week and about 21 bars is one month.</dd>
+<dt>As of</dt><dd>The job runs at night after the U.S. market closes, so the newest day on the page is the last completed trading day. Today's partial trading is never included. The day picker in the header lets you look at any earlier trading day of the past year once the indicator has enough history: MACD needs about 33 trading days of prices before its first value, so the picker starts there (roughly seven weeks after the oldest price on the page).</dd>
+<dt>Holdings</dt><dd>Tickers you own. You enter them on the My list tab. They always appear in the All holdings table, with or without a signal.</dd>
+<dt>Watchlist</dt><dd>Tickers you do not own but keep an eye on. In the Watchlist table they appear only on days they fire a signal, unless you tick "show all"; they are always available in the Signal timeline and on the Charts tab.</dd>
+<dt>ETF / fund</dt><dd>A basket of many stocks or bonds traded as one ticker, such as VOO or QQQ. Funds that hold short-term U.S. Treasury bills (SGOV, BIL and similar) barely move, so MACD says little about them.</dd>
+</dl>
+
+<h2>Moving averages and MACD</h2>
+<dl>
+<dt>Moving average</dt><dd>The average close over the last N days, recomputed each day. It smooths out daily noise so you can see the direction of travel.</dd>
+<dt>EMA</dt><dd>Exponential moving average: a moving average that gives more weight to recent days, so it reacts faster than a plain average.</dd>
+<dt>MACD</dt><dd>Moving Average Convergence Divergence. The <b>MACD line</b> is the 12-day EMA minus the 26-day EMA. When it is above zero, recent prices are running above the longer-term trend (momentum is up); below zero, momentum is down. It is quoted in price units, so a MACD of +3.9 on a $344 stock is small, and the page also shows it as a percent of price.</dd>
+<dt>Signal line</dt><dd>A 9-day EMA of the MACD line, so a smoothed, lagging copy of it. The three numbers "12/26/9" are these settings and are the standard ones.</dd>
+<dt>Histogram</dt><dd>MACD line minus signal line, drawn as bars. Green bars above zero mean MACD is above its signal line; red bars below zero mean it is below. Bars that are shrinking toward zero mean the two lines are converging, which is momentum fading. Growing bars mean momentum is building.</dd>
+<dt>Crossover</dt><dd>The moment the MACD line crosses the signal line. The histogram flips sign and changes colour. Crossing downward is a bearish crossover (peak); crossing upward is a bullish crossover (valley).</dd>
+<dt>Zero line</dt><dd>MACD at zero means the 12-day and 26-day averages are equal. Peak signals that happen above zero and valley signals below zero are considered more meaningful than ones near zero.</dd>
+</dl>
+
+<h2>The signals</h2>
+<p>Each signal shows only on the day it first appears. A ticker can fire two stages on the same day if things move fast. The three stages, from earliest and least reliable to latest and most reliable:</p>
+<dl>
+<dt>1. Early warning</dt><dd>The histogram has shrunk two days in a row after reaching a high (peak) or low (valley). Momentum is fading, but nothing has crossed yet. Many early warnings fizzle out.</dd>
+<dt>2. MACD turned</dt><dd>The MACD line itself changed direction: turned down while above zero (peak) or turned up while below zero (valley).</dd>
+<dt>3. CONFIRMED crossover</dt><dd>The MACD line crossed its signal line. This is the classic MACD signal that most traders watch. It is the most reliable of the three but also the latest, often days after the actual price turn.</dd>
+<dt>PEAK</dt><dd>Momentum may be topping out. The price may still rise, but the rate of climb is slowing or reversing. Peaks on holdings are at the top of the dashboard because they are the ones most people want to notice first.</dd>
+<dt>VALLEY</dt><dd>Momentum may be bottoming out. The decline is slowing or reversing.</dd>
+<dt>Choppy</dt><dd>MACD is hugging zero (under 0.25% of the price). In that zone the lines cross back and forth constantly and the signals mean little. Normal for T-bill and Treasury funds like SGOV and VGIT.</dd>
+<dt>P1, P2, P3, V1, V2, V3</dt><dd>Short codes used in the timeline grid: P for peak, V for valley, number for the stage.</dd>
+</dl>
+
+<h2>The other numbers</h2>
+<dl>
+<dt>RSI (14)</dt><dd>Relative Strength Index over 14 days, a 0 to 100 score of how strong recent gains have been compared with recent losses. Above 70 is conventionally called "overbought" (a strong run that may be stretched), below 30 "oversold". Around 50 is neutral. The meters mark 30 and 70 and turn red at 70 or above and blue at 30 or below.</dd>
+<dt>Below 1-yr high</dt><dd>How far the close is below the highest close of the year of history on this page, up to the selected day, in percent. 0% means it closed at a new one-year high. A peak signal within a couple of percent of the high is flagged "near 1-yr high".</dd>
+<dt>Near highs, no turn yet</dt><dd>Holdings within 2% of their one-year high with RSI of 65 or more that have not fired any signal that day. Strong, but no sign of turning. Choppy tickers are left out: a money-market fund is always at its high, which says nothing.</dd>
+<dt>MACD vs signal</dt><dd>"above, falling" means the MACD line is above the signal line (histogram green) but the gap is closing; "below, rising" means below (red) with the gap closing; and so on.</dd>
+<dt>Histogram (sparkline)</dt><dd>The last N histogram bars in miniature, N set by the range selector. Green above the line, red below.</dd>
+<dt>Recent</dt><dd>A strip of the trading days in the selected range, oldest on the left. A coloured mark is a day that ticker fired a signal; hover for details.</dd>
+<dt>Stage tracker</dt><dd>The three boxes on each card. Filled boxes are stages seen in the last 10 trading days; the outlined box is the selected day's.</dd>
+<dt>Data from &lt;date&gt;</dt><dd>A small badge that appears when a ticker's newest data is older than the selected day, for example when last night's download for it failed and the previous night's file was kept.</dd>
+</dl>
+
+<h2>Reading the charts</h2>
+<p>The top panel is the closing price. The dashed line is the one-year high up to the selected day. The middle panel is the MACD line (blue), the signal line (orange) and the histogram (green and red bars) with a dotted zero line. Markers on the MACD line are days a signal fired, coloured by stage. The bottom panel is RSI, with dotted lines at 30 and 70. Hover anywhere to read the exact values for that day.</p>
+<div class="ex">A typical peak sequence on the chart: the green histogram bars get shorter (early warning), the blue MACD line flattens and tips over (MACD turned), then the blue line drops through the orange line and the bars turn red (CONFIRMED).</div>
+
+<h2>Things to keep in mind</h2>
+<p>MACD is built from averages, so it lags. By the time a crossover is confirmed, part of the move has already happened. It also gives plenty of false alarms in sideways markets. Treat these signals as a prompt to look, not as a verdict. Prices come from Yahoo Finance and can occasionally be late or missing; the footer shows how many tickers failed or were kept from the previous night. Nothing here is financial advice.</p>
+
+<h2>About this site</h2>
+<p>The prices come from Yahoo Finance and are downloaded once a night by a free, automated GitHub job; everything is computed as of the last completed trading day. <span id="params-note"></span></p>
+<p>Your list of tickers stays in your browser and in the page address. It is never sent anywhere. Share the page address and the other person sees the same list.</p>
+<p>Nothing on this page is financial advice. It only describes what an indicator is doing.</p>
+</div>
+</div>
+
+<div id="view-list" hidden>
+<div class="editor">
+  <div class="intro" id="ed-intro" hidden>
+    <p><b>Welcome.</b> This page shows what the MACD momentum indicator is doing for the stocks and funds you choose. Type the tickers you own under Holdings and the ones you keep an eye on under Watch, then press Save list; or load an example list to see how the page looks.</p>
+    <button id="example" class="primary">Load an example list</button>
+  </div>
+  <div class="cols">
+    <div>
+      <label for="ed-h">Holdings <span>(tickers you own)</span></label>
+      <textarea id="ed-h" spellcheck="false" autocapitalize="characters" placeholder="AAPL MSFT BRK-B"></textarea>
+    </div>
+    <div>
+      <label for="ed-w">Watch <span>(tickers you keep an eye on)</span></label>
+      <textarea id="ed-w" spellcheck="false" autocapitalize="characters" placeholder="SPY QQQ"></textarea>
+    </div>
+  </div>
+  <div class="hint">Separate tickers with spaces, commas or new lines. Any case works. Class shares can use a dot or a dash (BRK.B or BRK-B). A ticker in both boxes counts as a holding.</div>
+  <div class="actions">
+    <button id="save" class="primary">Save list</button>
+    <button id="example2">Load an example list</button>
+    <button id="copybtn2">Copy link</button>
+    <span class="sub" id="copied2" hidden>Link copied</span>
+  </div>
+  <div class="hint">Your list is saved in this browser and in the page address. Nothing is sent anywhere.</div>
+  <div id="ed-msgs"></div>
+</div>
+</div>
+
+<footer id="footer"></footer>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

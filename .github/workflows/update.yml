@@ -1,0 +1,201 @@
+# Nightly price update for the MACD Signals site.
+#
+# What this file does, in plain English:
+#   1. Every weekday evening (US time) GitHub starts a small computer for a few minutes.
+#   2. It downloads a year of daily prices for every ticker in universe.txt from Yahoo
+#      Finance and works out the MACD / RSI numbers and the signals (fetch_data.py does that).
+#   3. It publishes the web page together with those numbers to GitHub Pages.
+#   4. It writes today's date into .github/last-run.txt. That small change counts as
+#      activity in the repository, and GitHub switches off schedules in public repositories
+#      that have had no activity for 60 days.
+#
+# You can also start it by hand: open the Actions tab, click "Update prices and publish"
+# in the left column, then click "Run workflow". See SETUP.md, step 5.
+#
+# Nothing here gives buy or sell advice. It downloads prices and does arithmetic.
+
+name: Update prices and publish
+
+on:
+  schedule:
+    # 02:30 UTC, Tuesday to Saturday. That is Monday to Friday evening in the US
+    # (10:30 pm New York time in summer, 9:30 pm in winter), after the day's closing
+    # price is final. GitHub may start it a little late when its computers are busy.
+    - cron: "30 2 * * 2-6"
+  # This line adds the "Run workflow" button in the Actions tab.
+  workflow_dispatch:
+
+# What the job is allowed to do in this repository. GitHub gives it a temporary key
+# that can do only these things.
+permissions:
+  contents: write   # push the small "today's date" commit (keeps the schedule alive)
+  pages: write      # publish to GitHub Pages
+  id-token: write   # prove to GitHub Pages that the publish request comes from this job
+
+# Never publish twice at the same time. A second run waits for the first to finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Fetch prices and compute signals
+    runs-on: ubuntu-latest
+    # Backstop only. A normal night takes about 10 minutes, and the fetch step below stops
+    # fetch_data.py itself after 150 minutes so the summary is still written. If this job
+    # limit is ever reached, GitHub cancels the run with no summary at all.
+    timeout-minutes: 180
+    steps:
+      - name: Get a copy of the repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Restore last night's data files (the fallback if Yahoo fails tonight)
+        id: restore
+        uses: actions/cache/restore@v6
+        with:
+          path: site/data
+          # The key is different on every run, so the exact key never matches and the
+          # lookup falls back to the newest saved set that starts with "prices-", which
+          # is the previous run's files.
+          key: prices-${{ github.run_id }}
+          restore-keys: |
+            prices-
+
+      - name: Fetch prices and compute signals
+        id: fetch
+        shell: bash
+        run: |
+          mkdir -p site/data
+          log="$RUNNER_TEMP/fetch.log"
+
+          # Run the fetcher. "tee" shows every line here in the log and keeps a copy.
+          #
+          # "timeout" stops fetch_data.py if it is still running after 150 minutes. A normal
+          # night takes about 10 minutes. But when Yahoo is down or blocking every request,
+          # the fetcher's own retries and waits can add up to many hours, and GitHub would
+          # then cancel the whole job with no summary and without saving the data files.
+          # Stopping the fetcher here instead means the lines below still write a summary
+          # and the next step still keeps the good files for tomorrow.
+          set +e
+          timeout --kill-after=30s 150m python -I -u fetch_data.py 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          set -e
+
+          # "timeout" reports 124 when it had to stop the fetcher (137 if it had to force it).
+          # The fetcher writes each file in one go, so a half-written ".tmp" file can only be
+          # left behind if it was stopped mid-write; remove any such leftovers.
+          stopped=""
+          if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+            stopped="yes"
+            rm -f site/data/*.tmp
+          fi
+
+          # The last line fetch_data.py prints looks like:
+          #   fetched 790  stale 3  failed 2  last_bar 2026-10-29  elapsed 312s
+          # (Progress lines also mention "fetched", but only the final line starts with it.)
+          summary="$(grep -E '^fetched [0-9]+' "$log" | tail -n 1 || true)"
+          if [ -n "$stopped" ]; then
+            summary="fetch_data.py was stopped after 150 minutes without finishing (Yahoo was probably down or blocking the job tonight)"
+          elif [ -z "$summary" ]; then
+            summary="fetch_data.py printed no summary line (exit code $status)"
+          fi
+
+          echo ""
+          echo "=== SUMMARY: $summary ==="
+
+          # The same line goes to the run's Summary page, so nobody has to read the log.
+          {
+            echo "## Nightly price update"
+            echo ""
+            echo '```'
+            echo "$summary"
+            echo '```'
+            echo ""
+            echo "- **fetched**: tickers downloaded fresh tonight"
+            echo "- **stale**: tickers whose download failed tonight, so last night's file was kept"
+            echo "- **failed**: tickers with no data at all"
+            echo "- **last_bar**: the trading day the numbers are as of"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$status" -ne 0 ]; then
+            echo "::error title=Price update failed::$summary"
+            {
+              echo ""
+              echo "**The fetch failed (exit code $status), so nothing was published tonight.**"
+              echo "See the Troubleshooting section of README.md."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit "$status"
+          fi
+          echo "::notice title=Price update::$summary"
+
+      - name: Save tonight's data files for tomorrow's fallback
+        # Runs even when the fetch failed, so whatever good files exist are kept.
+        if: ${{ !cancelled() }}
+        uses: actions/cache/save@v6
+        with:
+          path: site/data
+          key: prices-${{ github.run_id }}
+
+      # This step only checks that GitHub Pages is switched on for the repository. Two
+      # different messages can appear if Pages is not set up the way SETUP.md, step 4 says:
+      #   - Pages is switched off entirely: THIS step fails with "Get Pages site failed.
+      #     Please verify that the repository has Pages enabled...".
+      #   - Pages is on, but its Source is "Deploy from a branch" instead of "GitHub Actions":
+      #     this step passes, this whole job goes green, and the "Publish" step at the bottom
+      #     fails with "Failed to create deployment (status: 404)... Ensure GitHub Pages has
+      #     been enabled".
+      # The fix is the same for both: Settings -> Pages -> Source -> "GitHub Actions", then
+      # run the workflow by hand again.
+      - name: Prepare GitHub Pages
+        uses: actions/configure-pages@v6
+
+      - name: Package the site folder for publishing
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+      - name: Record today's date so GitHub keeps the schedule running
+        id: keepalive
+        shell: bash
+        run: |
+          today="$(date -u +%Y-%m-%d)"
+          previous=""
+          if [ -f .github/last-run.txt ]; then
+            previous="$(tr -d '\r' < .github/last-run.txt)"
+          fi
+          if [ "$previous" = "$today" ]; then
+            echo "last-run.txt already says $today, so there is nothing to commit."
+            exit 0
+          fi
+          echo "$today" > .github/last-run.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/last-run.txt
+          git commit -m "Nightly update ran on $today"
+          # If the push is refused (for example because someone pushed a change at the
+          # same moment), just say so. The site was still published, and the next run
+          # will try again. This must never fail the job.
+          if git push; then
+            echo "Recorded $today in .github/last-run.txt."
+          else
+            echo "::warning title=Date not recorded::Could not push the .github/last-run.txt update. The site was still published. The next run will try again."
+          fi
+
+  deploy:
+    name: Publish to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # If this fails with "Failed to create deployment (status: 404)", the Pages Source is
+      # not set to "GitHub Actions". See the note above the "Prepare GitHub Pages" step.
+      - name: Publish
+        id: deployment
+        uses: actions/deploy-pages@v5
