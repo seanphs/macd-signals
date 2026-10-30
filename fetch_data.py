@@ -137,6 +137,9 @@ def fetch_chart(sym, range_="1y", attempts=ATTEMPTS, timeout=TIMEOUT):
     return chart["result"][0]
 
 
+QUOTE_FILLS = []   # bars whose close was taken from the closing quote (see completed_bars)
+
+
 def completed_bars(res):
     """Return (dates, closes) of completed daily bars, selected exactly as macd_scan.py does."""
     if not res.get("timestamp"):
@@ -148,6 +151,15 @@ def completed_bars(res):
     reg = meta.get("currentTradingPeriod", {}).get("regular", {})
     if reg and ts[-1] >= reg["start"] and time.time() < reg["end"]:
         ts, closes = ts[:-1], closes[:-1]
+    # Yahoo's evening quirk: for an hour or two after the close, today's bar comes back with a
+    # null close while the meta still carries the closing quote (regularMarketPrice, stamped at
+    # the close). Take that quote so the nightly job is not a day behind. By the morning, when
+    # macd_scan.py runs, the bar is settled and this never applies.
+    quote, quote_time = meta.get("regularMarketPrice"), meta.get("regularMarketTime", 0)
+    if (reg and closes and closes[-1] is None and ts[-1] >= reg["start"] and time.time() >= reg["end"]
+            and reg["start"] <= quote_time and isinstance(quote, (int, float))):
+        closes = closes[:-1] + [float(quote)]
+        QUOTE_FILLS.append(ts[-1])
     offset = meta.get("gmtoffset", 0)
     pairs = [(t, c) for t, c in zip(ts, closes) if c is not None]
     dates = [dt.datetime.fromtimestamp(t + offset, dt.timezone.utc).date() for t, _ in pairs]
@@ -403,6 +415,9 @@ def main(argv=None):
             print(f"{i}/{len(requested)}  fetched {fetched}  stale {stale}  failed {len(failed)}"
                   f"  ({time.time() - started:.0f}s)", flush=True)
 
+    if QUOTE_FILLS:
+        print(f"{len(QUOTE_FILLS)} tickers: the latest close was taken from Yahoo's closing quote "
+              f"because the daily bar was still empty", flush=True)
     last_bar = most_common(t["last_bar"] for t in tickers.values())
     write_json(out / "index.json", {
         "generated": now_utc(),

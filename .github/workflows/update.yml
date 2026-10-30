@@ -18,10 +18,11 @@ name: Update prices and publish
 
 on:
   schedule:
-    # 02:30 UTC, Tuesday to Saturday. That is Monday to Friday evening in the US
-    # (10:30 pm New York time in summer, 9:30 pm in winter), after the day's closing
-    # price is final. GitHub may start it a little late when its computers are busy.
-    - cron: "30 2 * * 2-6"
+    # 06:00 UTC, Tuesday to Saturday. That is Monday to Friday night in the US
+    # (2 am New York time in summer, 1 am in winter), hours after the day's closing
+    # price is final and well before the morning. GitHub may start it a little late
+    # when its computers are busy.
+    - cron: "0 6 * * 2-6"
   # This line adds the "Run workflow" button in the Actions tab.
   workflow_dispatch:
 

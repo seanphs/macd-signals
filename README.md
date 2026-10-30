@@ -30,9 +30,12 @@ not need anything. [SETUP.md](SETUP.md) walks through creating the account and e
 
 Details worth knowing:
 
-- **Timing.** The job starts at 02:30 UTC, Tuesday to Saturday. That is 10:30 pm New York time
-  (9:30 pm in winter) Monday to Friday, after the day's closing price is final. GitHub can start
-  it a little late when it is busy. The footer of the page shows the date its numbers are as of.
+- **Timing.** The job starts at 06:00 UTC, Tuesday to Saturday. That is 2 am New York time
+  (1 am in winter) Monday to Friday night, hours after the day's closing price is final and well
+  before the morning. GitHub can start it a little late when it is busy. The footer of the page
+  shows the date its numbers are as of. (Yahoo leaves the day's closing price blank for an hour
+  or two right after the close; if the job ever runs in that window it uses Yahoo's closing quote
+  instead, so the page is still up to date.)
 - **If Yahoo does not answer for a ticker,** the job keeps the previous night's file for that
   ticker and marks it "stale". The page then shows a small "data from <date>" badge next to that
   ticker. If fewer than half of the tickers have any usable file at all (fresh or kept from the

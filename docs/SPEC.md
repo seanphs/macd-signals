@@ -62,7 +62,12 @@ python -I fetch_data.py [--universe universe.txt] [--out site/data] [--only T1,T
   "not fetched: the run was out of time". One log line announces each cutoff.
 - Drop the current session's partial bar exactly as macd_scan.py does (`currentTradingPeriod.regular`
   check), drop bars whose close is null, convert timestamps to exchange-local dates with
-  `meta.gmtoffset`.
+  `meta.gmtoffset`. One addition over macd_scan.py: for an hour or two after the close Yahoo
+  returns today's bar with a null close while `meta.regularMarketPrice` (stamped
+  `regularMarketTime` at the close) holds the closing quote; when the session has ended, the
+  last bar is today's and its close is null, use that quote as the close (counted and reported
+  in one log line). macd_scan.py runs in the morning, when the bar is settled, so it never sees
+  this state.
 - Name: `meta.shortName` or `meta.longName`, else the symbol. Also keep `meta.currency`,
   `meta.exchangeName`.
 - Compute, using functions copied verbatim from macd_scan.py (same EMA seeding: SMA of the first n
@@ -242,8 +247,8 @@ It is not financial advice."
 
 ## .github/workflows/update.yml
 
-- Name: "Update prices and publish". Triggers: `schedule` cron `30 2 * * 2-6` (02:30 UTC Tuesday
-  to Saturday = Monday to Friday evenings in the US, after the daily bar is final) and
+- Name: "Update prices and publish". Triggers: `schedule` cron `0 6 * * 2-6` (06:00 UTC Tuesday
+  to Saturday = Monday to Friday nights in the US, hours after the daily bar is final) and
   `workflow_dispatch`.
 - Permissions: `contents: write` (keepalive commit), `pages: write`, `id-token: write`.
   `concurrency: {group: pages, cancel-in-progress: false}`.
