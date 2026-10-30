@@ -85,6 +85,10 @@ git remote add origin https://github.com/<username>/macd-signals.git
 git push -u origin main
 ```
 
+Later changes from the PC go up with `git add .`, `git commit -m "..."`, then
+`git pull --rebase origin main` and `git push`. The pull is needed because the nightly job
+commits the date of its last run; without it the push is refused with "fetch first".
+
 ### Option B: upload through the browser
 
 1. On your PC, open the folder `D:\MACD_Web` in File Explorer.

@@ -167,6 +167,11 @@ python -m http.server 8000
 Then open http://localhost:8000/ in a browser. The page cannot be opened directly as a file;
 it needs that small local web server.
 
+To send a change made on the PC up to GitHub, run `git pull --rebase origin main` before
+`git push`: the nightly job adds a small commit (the date in `.github/last-run.txt`) every
+night, so a push without a pull first is refused with "fetch first". Edits made on the GitHub
+website itself (for example to `universe.txt`) need nothing of the sort.
+
 ## Privacy
 
 - Your lists stay in your browser (and in the page address, if you use **Copy link**). The page
