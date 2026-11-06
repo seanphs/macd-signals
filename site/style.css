@@ -181,6 +181,16 @@ svg.chart .mark { stroke: var(--surface); stroke-width: 2; }
 .tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
   padding: 6px 9px; font-size: 12px; line-height: 1.4; box-shadow: 0 4px 14px rgba(0,0,0,.15); display: none; white-space: nowrap; }
 .tip b { font-weight: 600; }
+/* screener */
+#screen-note { margin: -4px 0 12px; }
+.filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; }
+.filters label { font-size: 13px; color: var(--text-2); display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
+.filters select { max-width: 100%; }
+.filters select:disabled { opacity: .5; cursor: default; }
+#screen-count { margin-bottom: 8px; }
+.up { color: var(--hist-pos); } .down { color: var(--hist-neg); }
+.badge.days { background: var(--valley-bg); color: var(--valley-3); font-weight: 500; }
+.addwatch { font-size: 12px; padding: 3px 8px; white-space: nowrap; }
 /* list editor */
 .editor { max-width: 820px; }
 .editor .intro { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; }

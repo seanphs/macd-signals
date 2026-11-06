@@ -1,15 +1,16 @@
 # Tickers the nightly job fetches, one per line. Lines starting with # are notes and are ignored.
 # Yahoo Finance symbol format: class shares use a dash (BRK-B), indexes start with ^ (^GSPC).
-# To follow a new ticker, add it under '# Added by the owner' at the bottom of this file.
+# To follow a new ticker, add it under '## Added by the owner' at the bottom of this file.
 
-# Indexes
+## Indexes
 ^GSPC
 ^NDX
 ^DJI
 ^RUT
 ^VIX
 
-# S&P 500 (from Wikipedia, 2026-10-29)
+## S&P 500
+# (from Wikipedia, 2026-10-29)
 MMM
 AOS
 ABT
@@ -514,7 +515,10 @@ ZBRA
 ZBH
 ZTS
 
-# Nasdaq-100
+# Dow 30
+# All 30 Dow companies are already in the S&P 500 list above, so nothing is repeated here.
+
+## Nasdaq-100
 # (only the companies that are not already in the S&P 500 list above)
 ALNY
 ARM
@@ -532,10 +536,7 @@ SHOP
 SPCX
 TRI
 
-# Dow 30
-# All 30 Dow companies are already in the S&P 500 list above, so nothing is repeated here.
-
-# ETFs
+## ETFs
 # Broad market
 SPY
 IVV
@@ -681,8 +682,8 @@ NVDL
 UVXY
 VXX
 
-# Other popular stocks and ADRs
-# Large companies outside the S&P 500 and big foreign ADRs
+## Other stocks
+# Large companies outside the S&P 500, big foreign ADRs, and popular names
 TSM
 NVO
 SAP
@@ -836,6 +837,6 @@ VIK
 VG
 HNGE
 
-# Added by the owner
+## Added by the owner
 # Put one ticker per line below this note (for example VTR, or BRK-B for class shares).
 # The nightly run picks up new lines automatically; no other change is needed.

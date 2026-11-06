@@ -6,6 +6,16 @@ prices for about 800 tickers from Yahoo Finance, works out the numbers and the s
 publishes them to the site. Each visitor keeps their own list of tickers in their own browser.
 There is nothing to install, no login and no cost.
 
+**Screener.** Besides your own list, the **Screener** tab shows every ticker in the data set
+that fired a signal on the last completed trading day, so you can see where the indicator turned
+on stocks you do not follow yet. It covers the latest day only (the day picker does not apply
+there). Filters narrow the list: **Show** (valleys, peaks, recovering, or all signals), **Stage at
+least**, **RSI**, **Below 1-yr high at least**, **Group** (S&P 500, Nasdaq-100, ETFs and so on),
+and a **Hide choppy** box that is on by default. The filters are remembered in your browser. An
+**Add to watch** button puts a ticker on your watch list without leaving the tab. Like the rest
+of the page, the Screener describes what the indicator did; it is not a list of things to buy
+or sell.
+
 **This site is not financial advice.** It describes what an indicator is doing. It does not tell
 anyone what to buy or sell.
 
@@ -18,10 +28,13 @@ not need anything. [SETUP.md](SETUP.md) walks through creating the account and e
 ## How it works
 
 1. `universe.txt` lists the tickers the job downloads: the big US indexes, the S&P 500, the
-   Nasdaq-100, the Dow 30, popular ETFs and popular stocks, about 800 in all.
-2. Every Monday to Friday evening (US time) GitHub runs the job described in
+   Nasdaq-100, the Dow 30, popular ETFs and popular stocks, about 800 in all. Lines starting
+   with `## ` (two hashes) name the groups the Screener's **Group** filter offers: `## Indexes`,
+   `## S&P 500`, `## Nasdaq-100`, `## ETFs`, `## Other stocks` and `## Added by the owner`.
+2. Every Monday to Friday night (US time) GitHub runs the job described in
    `.github/workflows/update.yml`. The job runs `fetch_data.py`, which downloads a year of daily
-   closing prices for each ticker from Yahoo Finance and computes MACD, RSI and the signals.
+   closing prices for each ticker from Yahoo Finance, computes MACD, RSI and the signals, and
+   writes a one-line-per-ticker summary of the latest day for the Screener (`screener.json`).
 3. The job publishes the `site` folder together with the computed data using **GitHub Pages**,
    GitHub's free website hosting. The site address looks like
    `https://<your-username>.github.io/macd-signals/`.
@@ -30,9 +43,11 @@ not need anything. [SETUP.md](SETUP.md) walks through creating the account and e
 
 Details worth knowing:
 
-- **Timing.** The job starts at 06:00 UTC, Tuesday to Saturday. That is 2 am New York time
-  (1 am in winter) Monday to Friday night, hours after the day's closing price is final and well
-  before the morning. GitHub can start it a little late when it is busy. The footer of the page
+- **Timing.** The job starts at 05:37 UTC, Tuesday to Saturday. That is 1:37 am New York time
+  (12:37 am in winter) Monday to Friday night, hours after the day's closing price is final and
+  well before the morning. The odd minute is deliberate: GitHub starts jobs scheduled on the top
+  of the hour hours late, because so many repositories ask for that moment. GitHub can still
+  start it a little late when it is busy. The footer of the page
   shows the date its numbers are as of. (Yahoo leaves the day's closing price blank for an hour
   or two right after the close; if the job ever runs in that window it uses Yahoo's closing quote
   instead, so the page is still up to date.)
@@ -50,15 +65,16 @@ Details worth knowing:
 
 | File | What it is |
 |---|---|
-| `universe.txt` | The tickers the job downloads. Edit this to add tickers. |
+| `universe.txt` | The tickers the job downloads, in groups headed by `## ` lines. Edit this to add tickers (under `## Added by the owner`). |
 | `fetch_data.py` | The program that downloads prices and computes the numbers. |
 | `site/` | The web page itself: `index.html`, `app.js`, `style.css`. |
-| `site/data/` | The computed data. The job creates it; it is not kept in the repository. |
+| `site/data/` | The computed data: `index.json`, `screener.json` (the Screener's latest-day summary) and one file per ticker. The job creates it; it is not kept in the repository. |
 | `.github/workflows/update.yml` | The nightly job. |
 | `.github/last-run.txt` | The date of the last successful run. |
 | `README.md` | This file. |
 | `SETUP.md` | Step-by-step setup for the owner. |
 | `docs/SPEC.md` | The technical description the files were built to. |
+| `docs/SCREENER.md` | The same for the Screener tab and `screener.json`. |
 
 A "repository" is GitHub's word for one project's folder. A "commit" is a saved change with a
 short note attached. A "workflow" is a job GitHub runs for you.
@@ -71,8 +87,10 @@ this:
 
 1. On GitHub, open your repository and click `universe.txt`.
 2. Click the pencil icon (**Edit file**) at the top right of the file.
-3. Scroll to the bottom, to the heading `# Added by the owner`, and type the ticker on its own
-   line. Use Yahoo's spelling: `BRK-B`, not `BRK.B`.
+3. Scroll to the bottom, to the heading `## Added by the owner`, and type the ticker on its own
+   line below the note there. Use Yahoo's spelling: `BRK-B`, not `BRK.B`. (The `## ` lines are
+   group headings; a ticker belongs to the nearest `## ` heading above it, so one added at the
+   bottom shows up in the Screener's "Added by the owner" group.)
 4. Click **Commit changes...**, then click **Commit changes** in the box that opens.
 5. The new ticker is downloaded by the next nightly run. If you do not want to wait, run the job
    by hand (next section).
@@ -120,6 +138,10 @@ Anyone can open the site address. Nobody needs a GitHub account to view it.
   holdings near their one-year high, a table of all holdings, your watchlist and a timeline of
   recent signals. Each signal has a stage: 1 is an early warning, 2 means the indicator has
   turned, 3 is a confirmed crossover.
+- **Screener** shows every ticker in the data set that fired on the last completed trading day,
+  with filters for direction, stage, RSI, distance below the one-year high and group, and an
+  **Add to watch** button. The day picker does not apply there. Clicking a ticker opens its
+  chart even if it is not on your list.
 - **Charts** shows one ticker at a time: price, MACD and RSI over the range you choose, from 5
   days to 1 year. Move the mouse over the chart to read the numbers for any day.
 - **Info** explains every term on the page in plain language. Start there if MACD and RSI are new
@@ -144,6 +166,7 @@ on its Summary page and the red error line under it.
 | Summary says "fetch_data.py printed no summary line", or the log shows a "Traceback". | The program crashed. | Copy the red text and ask the assistant to fix it. |
 | The Actions tab says the scheduled workflow was disabled, or there has been no run for several days. | GitHub switches off schedules after 60 days without activity in the repository. The job prevents this by saving the date every night, but if it was failing or GitHub was changed, this can still happen. | Click **Update prices and publish** in the left column, click **Enable workflow**, then run the job by hand. |
 | The page says "The data has not been published yet, or the nightly job has not run. See SETUP.md." | No run has finished successfully yet, or Pages is not set up. | Do steps 4 to 6 of SETUP.md. |
+| The Screener tab says "The screener data has not been published yet; it appears after the next nightly run." | The nightly job that ran last did not write `screener.json` (the log then has a line "screener.json was not written"), or the site was published before the Screener existed. | Run the job by hand once. If the log says "screener.json was not written" again, copy that line and ask the assistant. The rest of the page is unaffected. |
 | The page shows a banner "Data last updated <date>. The nightly job may have stopped". | The last successful run is more than three days old. | Check the Actions tab for red runs and follow the rows above. |
 | The page shows an older date than you expect in the footer. | Your browser is showing a saved copy of the page, or the job has not run yet. | Hold Ctrl and press F5 (a "hard refresh", which makes the browser re-download the page). Then check the Actions tab. Publishing can take up to 10 minutes after a run finishes. |
 | The site address shows "404" or "There isn't a GitHub Pages site here". | Pages is not switched on, no run has finished yet, or the address is mistyped. | Check the address: `https://<your-username>.github.io/macd-signals/`. Under **Settings** → **Pages** the page should say "Your site is live at". |

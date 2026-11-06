@@ -104,7 +104,7 @@ commits the date of its last run; without it the push is refused with "fetch fir
 5. Wait until the list under the upload area shows every file. Check that these are all there:
    `.github/workflows/update.yml`, `.github/last-run.txt`, `.gitignore`, `fetch_data.py`,
    `universe.txt`, `site/index.html`, `site/app.js`, `site/style.css`, `README.md`, `SETUP.md`
-   and `docs/SPEC.md`.
+   `docs/SPEC.md` and `docs/SCREENER.md`.
 6. In the **Commit message** box, type `First upload`.
 7. Make sure **Commit directly to the main branch** is selected.
 8. Click **Commit changes**. (If the button says **Propose changes**, the wrong choice is
@@ -116,8 +116,9 @@ commits the date of its last run; without it the push is refused with "fetch fir
    3. On your PC, open `D:\MACD_Web\.github\workflows\update.yml` in Notepad, select all
       (Ctrl+A), copy (Ctrl+C), and paste (Ctrl+V) into the big box in the browser.
    4. Click **Commit changes...**, then **Commit changes**.
-   5. Do the same for `.github/last-run.txt` (its whole content is the single word `never`) and
-      for `.gitignore`.
+   5. Do the same for `.github/last-run.txt` (it holds one line, either `never` or the date of
+      the last run, for example `2026-10-30`; whatever is in your PC copy is fine, because the
+      job rewrites it on every successful run) and for `.gitignore`.
 
 ## Step 4: Turn on GitHub Pages
 
@@ -173,16 +174,18 @@ this step the first run fails with "Get Pages site failed".
 
 1. On GitHub, open the repository and click `universe.txt`.
 2. Click the pencil icon (**Edit file**) at the top right of the file.
-3. Scroll to the bottom, to the line `# Added by the owner`, and type each new ticker on its
-   own line. Use Yahoo's spelling: `BRK-B`, not `BRK.B`.
+3. Scroll to the bottom, to the line `## Added by the owner`, and type each new ticker on its
+   own line below the note there. Use Yahoo's spelling: `BRK-B`, not `BRK.B`. (Lines starting
+   with `## ` are group headings; tickers under this one appear in the Screener's "Added by the
+   owner" group.)
 4. Click **Commit changes...**, then **Commit changes** in the box that opens.
 5. The new tickers are downloaded by the next nightly run. To get them sooner, repeat step 5
    above.
 
 ## What happens from now on
 
-- The job runs on its own every Monday to Friday evening (US time). You do not need to do
-  anything.
+- The job runs on its own every Monday to Friday night (US time), at 05:37 UTC. You do not need
+  to do anything.
 - Each successful run writes the date into `.github/last-run.txt`. GitHub counts that as
   activity and keeps the schedule switched on. (GitHub switches off schedules in public
   repositories that have had no activity for 60 days.)

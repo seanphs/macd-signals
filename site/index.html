@@ -33,6 +33,7 @@
 
 <div class="tabs">
   <button data-tab="dash" class="on">Dashboard</button>
+  <button data-tab="screen">Screener</button>
   <button data-tab="chart">Charts</button>
   <button data-tab="info">Info</button>
   <button data-tab="list">My list</button>
@@ -81,6 +82,55 @@
   <div class="timeline" id="timeline"></div>
 </section>
 </div>
+</div>
+
+<div id="view-screen" hidden>
+<section>
+  <h2>Screener <span class="note">signals across the whole data set, not just your list; click a column header to sort, click a ticker for its chart</span></h2>
+  <p class="sub" id="screen-note">Every ticker in the data set that fired on the last completed trading day. The day picker does not apply here.</p>
+  <div class="filters" id="screen-filters">
+    <label>Show
+      <select id="sc-show" title="Which kind of signal to list">
+        <option value="valley">Valleys</option>
+        <option value="peak">Peaks</option>
+        <option value="recover">Recovering</option>
+        <option value="all">All signals</option>
+      </select></label>
+    <label id="sc-within-wrap" hidden>Within
+      <select id="sc-within" title="How many trading days back the valley crossover may be">
+        <option value="5">5 trading days</option>
+        <option value="10">10 trading days</option>
+        <option value="21">21 trading days</option>
+      </select></label>
+    <label>Stage at least
+      <select id="sc-stage" title="Lowest signal stage to list">
+        <option value="0">any</option>
+        <option value="2">2 (MACD turned)</option>
+        <option value="3">3 (confirmed)</option>
+      </select></label>
+    <label>RSI <select id="sc-rsi" title="RSI limit; below for valleys and recoveries, above for peaks"></select></label>
+    <label>Below 1-yr high at least
+      <select id="sc-below" title="How far below its one-year closing high the ticker must be">
+        <option value="0">any</option>
+        <option value="5">5%</option>
+        <option value="10">10%</option>
+        <option value="20">20%</option>
+        <option value="30">30%</option>
+      </select></label>
+    <label>Group <select id="sc-group" title="Which part of the site's ticker list"><option value="all">All groups</option></select></label>
+    <label><input type="checkbox" id="sc-choppy" checked> Hide choppy</label>
+    <label><input type="checkbox" id="sc-mine"> Only tickers not on my list</label>
+  </div>
+  <div class="status" id="screen-status" hidden></div>
+  <div class="sub" id="screen-count"></div>
+  <div class="scroll" id="screen-body"></div>
+  <div class="legend">
+    <span>The Recent column covers the last 21 trading days, oldest on the left:</span>
+    <span class="dot p1"></span> peak early <span class="dot p2"></span> peak turned <span class="dot p3"></span> peak confirmed
+    <span class="dot v1"></span> valley early <span class="dot v2"></span> valley turned <span class="dot v3"></span> valley confirmed
+    <span>&#9733; = on your list. Your filter settings are remembered in this browser.</span>
+  </div>
+</section>
 </div>
 
 <div id="view-chart" hidden>
@@ -145,6 +195,11 @@
 <dt>Recent</dt><dd>A strip of the trading days in the selected range, oldest on the left. A coloured mark is a day that ticker fired a signal; hover for details.</dd>
 <dt>Stage tracker</dt><dd>The three boxes on each card. Filled boxes are stages seen in the last 10 trading days; the outlined box is the selected day's.</dd>
 <dt>Data from &lt;date&gt;</dt><dd>A small badge that appears when a ticker's newest data is older than the selected day, for example when last night's download for it failed and the previous night's file was kept.</dd>
+<dt>Screener</dt><dd>The Screener tab lists every ticker in the data set (about 800) that fired a signal on the last completed trading day (or, under Recovering, crossed up within the last few days), not just the ones on your list, so you can look for valleys and recoveries on stocks you do not own yet. It covers the latest day only; the day picker does not apply to it. The filters you set are remembered in this browser. "Add to watch" puts a ticker on your watch list; clicking a ticker opens its chart even if it is not on your list.</dd>
+<dt>Recovering</dt><dd>A valley crossover (stage 3) within the last N trading days where the histogram is still positive and the MACD line is still rising: momentum turned up recently and has kept going so far. A recovery can fail; the next day can turn the histogram negative again.</dd>
+<dt>Last crossover</dt><dd>The most recent confirmed crossover (stage 3) in either direction and how many trading days ago it happened; 0 means it was on the latest day.</dd>
+<dt>1M / 3M change</dt><dd>The close compared with the close 21 / 63 trading days earlier (about one and three months), in percent.</dd>
+<dt>Group</dt><dd>Where the ticker sits in the site's list: Indexes, S&amp;P 500, Nasdaq-100, ETFs, Other stocks or Added by the owner. A company in both the S&amp;P 500 and the Nasdaq-100 is listed once, under S&amp;P 500.</dd>
 </dl>
 
 <h2>Reading the charts</h2>
@@ -152,7 +207,7 @@
 <div class="ex">A typical peak sequence on the chart: the green histogram bars get shorter (early warning), the blue MACD line flattens and tips over (MACD turned), then the blue line drops through the orange line and the bars turn red (CONFIRMED).</div>
 
 <h2>Things to keep in mind</h2>
-<p>MACD is built from averages, so it lags. By the time a crossover is confirmed, part of the move has already happened. It also gives plenty of false alarms in sideways markets. Treat these signals as a prompt to look, not as a verdict. Prices come from Yahoo Finance and can occasionally be late or missing; the footer shows how many tickers failed or were kept from the previous night. Nothing here is financial advice.</p>
+<p>MACD is built from averages, so it lags. By the time a crossover is confirmed, part of the move has already happened. It also gives plenty of false alarms in sideways markets. Treat these signals as a prompt to look, not as a verdict. A valley signal on a stock in a long decline is common on the way down; the "% below 1-yr high" column shows how far it has fallen, not whether it has stopped. Prices come from Yahoo Finance and can occasionally be late or missing; the footer shows how many tickers failed or were kept from the previous night. Nothing here is financial advice.</p>
 
 <h2>About this site</h2>
 <p>The prices come from Yahoo Finance and are downloaded once a night by a free, automated GitHub job; everything is computed as of the last completed trading day. <span id="params-note"></span></p>

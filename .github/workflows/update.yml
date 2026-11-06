@@ -1,9 +1,10 @@
 # Nightly price update for the MACD Signals site.
 #
 # What this file does, in plain English:
-#   1. Every weekday evening (US time) GitHub starts a small computer for a few minutes.
+#   1. Every weekday night (US time) GitHub starts a small computer for a few minutes.
 #   2. It downloads a year of daily prices for every ticker in universe.txt from Yahoo
-#      Finance and works out the MACD / RSI numbers and the signals (fetch_data.py does that).
+#      Finance and works out the MACD / RSI numbers and the signals (fetch_data.py does that),
+#      plus the one-line-per-ticker summary the Screener tab reads (screener.json).
 #   3. It publishes the web page together with those numbers to GitHub Pages.
 #   4. It writes today's date into .github/last-run.txt. That small change counts as
 #      activity in the repository, and GitHub switches off schedules in public repositories
@@ -18,11 +19,13 @@ name: Update prices and publish
 
 on:
   schedule:
-    # 06:00 UTC, Tuesday to Saturday. That is Monday to Friday night in the US
-    # (2 am New York time in summer, 1 am in winter), hours after the day's closing
-    # price is final and well before the morning. GitHub may start it a little late
-    # when its computers are busy.
-    - cron: "0 6 * * 2-6"
+    # 05:37 UTC, Tuesday to Saturday. That is Monday to Friday night in the US
+    # (1:37 am New York time in summer, 12:37 am in winter), hours after the day's
+    # closing price is final and well before the morning. The odd minute is on purpose:
+    # GitHub starts jobs scheduled on the top of the hour hours late, because so many
+    # repositories ask for that moment. GitHub may still start it a little late when
+    # its computers are busy.
+    - cron: "37 5 * * 2-6"
   # This line adds the "Run workflow" button in the Actions tab.
   workflow_dispatch:
 

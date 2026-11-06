@@ -3,7 +3,9 @@
 Reads universe.txt (one ticker per line), pulls about a year of daily closes for every
 ticker from Yahoo Finance, computes MACD (12/26/9), RSI (14) and the three-stage
 peak/valley signals for every day of that history, and writes one JSON file per ticker
-plus index.json into site/data/. The web page reads those files; nothing else is needed.
+plus index.json and screener.json into site/data/. The web page reads those files; nothing
+else is needed. screener.json is a one-line-per-ticker summary of the latest trading day
+(the Screener tab shows it); its exact contents are described in docs/SCREENER.md.
 
 The math is copied unchanged from macd_scan.py, the daily scanner this page grew out of:
 same EMA seeding (simple average of the first n values), same MACD and RSI definitions,
@@ -89,8 +91,10 @@ def normalise(raw):
 def read_universe(path):
     """Return the tickers of universe.txt in file order, duplicates dropped.
 
-    '#' starts a comment; blank lines and [section] headers are skipped. Tickers are
-    normalised here but not validated: main() reports odd ones under "failed".
+    '#' starts a comment; blank lines and [section] headers are skipped. The '## Group'
+    lines that name a group are comments too, so they are skipped here just the same
+    (read_universe_groups below is the one that reads them). Tickers are normalised here
+    but not validated: main() reports odd ones under "failed".
     """
     tickers = []
     for raw in Path(path).read_text(encoding="utf-8").splitlines():
@@ -101,6 +105,33 @@ def read_universe(path):
         if sym not in tickers:
             tickers.append(sym)
     return tickers
+
+
+DEFAULT_GROUP = "Other stocks"
+
+
+def read_universe_groups(path):
+    """Return {ticker: group} for universe.txt, parsed exactly like read_universe().
+
+    A line starting with '## ' names the group that every ticker after it belongs to, until
+    the next '## ' line ('## ETFs', '## Added by the owner', ...). A ticker above the first
+    '## ' line, or under a '##' line with no name after it, belongs to "Other stocks".
+    The first occurrence of a ticker decides its group, as read_universe keeps the first.
+    """
+    groups = {}
+    group = DEFAULT_GROUP
+    for raw in Path(path).read_text(encoding="utf-8").splitlines():
+        stripped = raw.strip()
+        if stripped.startswith("##"):
+            group = stripped[2:].strip() or DEFAULT_GROUP
+            continue
+        line = raw.split("#", 1)[0].strip()
+        if not line or (line.startswith("[") and line.endswith("]")):
+            continue
+        sym = normalise(line)
+        if sym not in groups:
+            groups[sym] = group
+    return groups
 
 
 # ---------------------------------------------------------------- fetching from Yahoo
@@ -328,6 +359,124 @@ def most_common(values):
     return max(counts, key=lambda v: (counts[v], v)) if counts else None
 
 
+# ---------------------------------------------------------------- screener.json (latest day, every ticker)
+
+RECENT_BARS = 21      # the "Recent" strip on the Screener covers the last 21 trading days
+CHANGE_BARS = {"chg_1m": 21, "chg_3m": 63}   # "1M change" = close vs 21 bars earlier, "3M" = 63
+
+
+def direction(values):
+    """"rising", "falling" or "flat": the last value against the one before it.
+    "flat" also when there is no previous value to compare with (first day after warm-up)."""
+    if len(values) < 2 or values[-1] is None or values[-2] is None:
+        return "flat"
+    if values[-1] > values[-2]:
+        return "rising"
+    if values[-1] < values[-2]:
+        return "falling"
+    return "flat"
+
+
+def pairs(events):
+    """[["VALLEY", 3], ...] from one day's event list: direction and stage, no detail text."""
+    return [[e["dir"], e["stage"]] for e in events]
+
+
+def screener_entry(record, group=DEFAULT_GROUP, stale=False, weak_pct=WEAK_PCT):
+    """The Screener's summary of one ticker file, as of the file's last bar (see SCREENER.md).
+
+    `record` is the parsed <SYM>.json. Returns None when the last bar has no MACD value yet
+    (a ticker still in its warm-up), so the caller leaves the ticker out. All numbers come
+    from the file's already-rounded arrays; only the few derived ones are rounded here.
+    """
+    dates, closes = record["dates"], record["close"]
+    macd_line, sig, hist, rsi_vals = record["macd"], record["signal"], record["hist"], record["rsi"]
+    if not dates or macd_line[-1] is None or hist[-1] is None:
+        return None
+    last_bar, close = dates[-1], closes[-1]
+    m, h = macd_line[-1], hist[-1]
+    pct_of_price = round(abs(m) / close * 100, 2)
+    highest = max(c for c in closes if c is not None)
+
+    def change(bars_back):
+        # close today against the close `bars_back` trading days earlier, in percent.
+        # "+ 0.0" turns a rounded -0.0 into 0.0 so the page never prints "-0.0%".
+        if len(closes) <= bars_back or closes[-1 - bars_back] in (None, 0):
+            return None
+        return round((close / closes[-1 - bars_back] - 1) * 100, 1) + 0.0
+
+    events = record.get("events") or {}
+    recent = {}
+    for day in dates[-RECENT_BARS:]:
+        if day in events:
+            recent[day] = pairs(events[day])
+    cross = None
+    for back, day in enumerate(reversed(dates)):          # newest day first
+        confirmed = [e for e in events.get(day, []) if e["stage"] == 3]
+        if confirmed:
+            cross = {"dir": confirmed[0]["dir"], "date": day, "days": back}
+            break
+
+    return {
+        "name": record["name"],
+        "group": group,
+        "last_bar": last_bar,
+        "stale": bool(stale),
+        "close": close,
+        "rsi": rsi_vals[-1],
+        "macd": m, "signal": sig[-1], "hist": h,
+        "pct_of_price": pct_of_price,
+        # compared on the unrounded ratio, exactly as the scanner and the Dashboard do
+        "weak": abs(m) / close * 100 < weak_pct,
+        "pct_below_high": round((1 - close / highest) * 100, 1) + 0.0,
+        "chg_1m": change(CHANGE_BARS["chg_1m"]),
+        "chg_3m": change(CHANGE_BARS["chg_3m"]),
+        "side": "above" if h >= 0 else "below",
+        "trend": direction(hist),
+        "macd_dir": direction(macd_line),
+        "today": pairs(events.get(last_bar, [])),
+        "recent": recent,
+        "cross": cross,
+    }
+
+
+def build_screener(out, tickers, groups, params, generated, last_bar):
+    """Build the screener.json object from the ticker files in `out`.
+
+    `tickers` is index.json's tickers map (fresh and stale alike), `groups` is
+    read_universe_groups()' {ticker: group}. Returns (screener, left_out): the object to
+    write and how many tickers were skipped because their file could not be read or has
+    no MACD value on its last bar. One bad file never stops the others.
+    """
+    entries, left_out = {}, 0
+    for sym, info in tickers.items():
+        try:
+            record = json.loads((Path(out) / f"{sym}.json").read_text(encoding="utf-8"))
+            entry = screener_entry(record, groups.get(sym, DEFAULT_GROUP),
+                                   info.get("stale", False), params["weak_pct"])
+        except Exception as e:
+            entry = None
+            print(f"  {sym}: left out of the screener ({describe(e)})", flush=True)
+        if entry is None:
+            left_out += 1
+        else:
+            entries[sym] = entry
+    # the groups that occur, in universe.txt order (a group only read_universe_groups never
+    # saw, i.e. the default for tickers outside universe.txt, goes last)
+    present = {entry["group"] for entry in entries.values()}
+    ordered = []
+    for group in list(groups.values()) + [DEFAULT_GROUP]:
+        if group in present and group not in ordered:
+            ordered.append(group)
+    return {
+        "generated": generated,
+        "last_bar": last_bar,
+        "params": params,
+        "groups": ordered,
+        "tickers": entries,
+    }, left_out
+
+
 # ---------------------------------------------------------------- main
 
 def main(argv=None):
@@ -419,11 +568,24 @@ def main(argv=None):
         print(f"{len(QUOTE_FILLS)} tickers: the latest close was taken from Yahoo's closing quote "
               f"because the daily bar was still empty", flush=True)
     last_bar = most_common(t["last_bar"] for t in tickers.values())
+    generated = now_utc()
+    params = {"fast": FAST, "slow": SLOW, "signal": SIG, "rsi": RSI_N, "weak_pct": WEAK_PCT}
+
+    # screener.json: the latest day for every ticker that has a file. If anything about it
+    # goes wrong the run carries on, because index.json and the summary line matter more.
+    try:
+        groups = read_universe_groups(args.universe) if Path(args.universe).is_file() else {}
+        screener, left_out = build_screener(out, tickers, groups, params, generated, last_bar)
+        write_json(out / "screener.json", screener)
+        print(f"screener: {len(screener['tickers'])} tickers, {left_out} left out", flush=True)
+    except Exception as e:
+        print(f"screener.json was not written: {describe(e)}", flush=True)
+
     write_json(out / "index.json", {
-        "generated": now_utc(),
+        "generated": generated,
         "last_bar": last_bar,
         "count": len(tickers),
-        "params": {"fast": FAST, "slow": SLOW, "signal": SIG, "rsi": RSI_N, "weak_pct": WEAK_PCT},
+        "params": params,
         "tickers": tickers,
         "failed": failed,
     })

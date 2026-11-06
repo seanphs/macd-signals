@@ -1,7 +1,8 @@
 /* MACD Signals page.
    Plain JavaScript, no libraries. It reads data/index.json and one data/<TICKER>.json per ticker
-   (both written by the nightly job), keeps the viewer's lists in the page address and in this
-   browser, and draws the dashboard, the charts and the glossary.
+   (both written by the nightly job), plus data/screener.json for the Screener tab, keeps the
+   viewer's lists in the page address and in this browser, and draws the dashboard, the screener,
+   the charts and the glossary.
    Nothing here is advice: the page only describes what an indicator is doing. */
 'use strict';
 (function () {
@@ -14,10 +15,25 @@ const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&': '&am
 const SYM_RE = /^[A-Z0-9^=.-]{1,12}$/;           // what a ticker may look like
 const RANGES = [['5D', 5], ['1M', 21], ['3M', 63], ['6M', 126], ['1Y', 250]];
 const STAGE = {1: 'early warning', 2: 'MACD turned', 3: 'CONFIRMED'};
-const TABS = ['dash', 'chart', 'info', 'list'];
+const TABS = ['dash', 'screen', 'chart', 'info', 'list'];
 const EXAMPLE = {h: ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META'], w: ['SPY', 'QQQ', 'DIA', 'BRK-B', 'JPM', 'VOO']};
 const MAX_INFLIGHT = 8;                           // data files fetched at the same time
 const INDEX_ERROR = 'The data has not been published yet, or the nightly job has not run. See SETUP.md.';
+// Screener (data/screener.json: every ticker's latest day, written by the nightly job)
+const SCREEN_ERROR = 'The screener data has not been published yet; it appears after the next nightly run.';
+const SCREEN_CAP = 400;                           // rows shown at most; past that the viewer is asked to add a filter
+const SCREEN_BARS = 21;                           // trading days the Screener's Recent strip covers (what screener.json holds)
+const SHOWS = ['valley', 'peak', 'recover', 'all'];
+// RSI choices for each Show setting, as [value, label]; 0 means "any". The side (below for
+// valleys and recoveries, above for peaks) follows the Show setting, so only the number is stored.
+const RSI_OPTS = {
+  valley: [[0, 'any'], [50, 'below 50'], [40, 'below 40'], [30, 'below 30']],
+  recover: [[0, 'any'], [50, 'below 50'], [40, 'below 40'], [30, 'below 30']],
+  peak: [[0, 'any'], [60, 'above 60'], [70, 'above 70']],
+  all: [[0, 'any']],
+};
+const RSI_DEFAULT = {valley: 40, recover: 40, peak: 60, all: 0};
+const SCREEN_DEFAULTS = {show: 'valley', stage: 0, rsi: 40, within: 10, below: 0, group: 'all', choppy: true, notmine: false};
 
 // ---- state ---------------------------------------------------------------
 const S = {
@@ -31,11 +47,17 @@ const S = {
   day: null,               // selected trading day (YYYY-MM-DD)
   rangeN: 21,              // bars shown by sparklines, strips, timeline and charts
   chartSym: null,
+  chartPending: null,      // a ticker opened from the Screener whose file is still being fetched
   tab: 'dash',
   editorNote: '',          // message about the last save (tickers that were ignored)
   loadToken: 0,
+  indexDone: false,        // true once data/index.json has been tried (loaded or failed)
+  screen: null,            // parsed data/screener.json (fetched the first time the Screener tab is shown)
+  screenError: null,       // why screener.json could not be loaded
+  screenLoading: false,
+  screenF: Object.assign({}, SCREEN_DEFAULTS),   // the Screener's filter settings (remembered in localStorage)
 };
-const SORT = {holdings: {col: 'off', asc: true}, watch: {col: 'default', asc: true}};
+const SORT = {holdings: {col: 'off', asc: true}, watch: {col: 'default', asc: true}, screen: {col: 'default', asc: true}};
 
 // ---- small helpers -------------------------------------------------------
 function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
@@ -73,6 +95,7 @@ function topSignal(sigs, dir) {
 function topAny(sigs) {  // peaks beat valleys, then the higher stage
   return sigs.reduce((a, b) => (b.dir === 'PEAK') !== (a.dir === 'PEAK') ? (b.dir === 'PEAK' ? b : a) : (b.stage > a.stage ? b : a));
 }
+function maxStage(sigs) { return sigs.reduce((m, s) => Math.max(m, s.stage), 0); }  // highest stage of any direction, 0 if none
 function rsiClass(v) { return v >= 70 ? 'hot' : v <= 30 ? 'cold' : ''; }
 function meter(pct, fillCls, ticks) {
   const t = (ticks || []).map(x => `<span class="tick" style="left:${x}%"></span>`).join('');
@@ -134,7 +157,8 @@ function fillEditor() {
   $('ed-h').value = S.lists.h.join(' ');
   $('ed-w').value = S.lists.w.join(' ');
 }
-function applyLists(l, note) {
+function applyLists(l, note, stay) {
+  // stay: keep the current tab (the Screener's "Add to watch" uses this); otherwise go to the Dashboard.
   S.lists = dedupe(l.h, l.w);
   S.listSource = 'edit';
   S.editorNote = note || '';
@@ -142,7 +166,7 @@ function applyLists(l, note) {
   writeHash();
   fillEditor();
   refresh();
-  if (S.lists.h.length || S.lists.w.length) showTab('dash');
+  if (!stay && (S.lists.h.length || S.lists.w.length)) showTab('dash');
 }
 function saveFromEditor() {
   const h = parseTokens($('ed-h').value), w = parseTokens($('ed-w').value);
@@ -277,6 +301,8 @@ function windowDays() {  // the trading days in the selected range, ending at th
   return end > 0 ? S.days.slice(Math.max(0, end - S.rangeN), end) : [];
 }
 function recentCount(r, days) { return days.reduce((n, d) => n + (eventsOn(r.f, d).length ? 1 : 0), 0); }
+// Listed tickers whose data file could not be loaded (a Screener ticker that failed is not the list's problem).
+function failedListed() { return Object.keys(S.fileErrors).filter(s => known(s) && listed().includes(s)); }
 
 // ---- sparkline, strip, cards, tables ------------------------------------
 function spark(r, n) {
@@ -294,12 +320,14 @@ function spark(r, n) {
   }).join('');
   return `<svg class="spark" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><line class="zero" x1="0" x2="${W}" y1="${mid}" y2="${mid}" stroke-width="1"/>${bars}</svg>`;
 }
-function strip(r, days, n) {
+function strip(sigsOn, days, n) {
+  // sigsOn(date) returns that day's signals ({dir, stage} objects); the Dashboard reads them from
+  // the ticker file, the Screener from screener.json's "recent" map.
   const W = 120, H = 14, slot = W / n, mw = Math.max(3, Math.min(10, slot - 2));
   const off = n - days.length;  // right-align: newest on the right
   const marks = days.map((d, j) => {
     const x = (off + j) * slot + slot / 2;
-    const sigs = eventsOn(r.f, d);
+    const sigs = sigsOn(d);
     if (!sigs.length) return n <= 21 ? `<circle cx="${x.toFixed(1)}" cy="${H / 2}" r="1.5" fill="var(--border)"><title>${esc(d)}: no new signal</title></circle>` : '';
     return `<rect class="${cls(topAny(sigs))}f" x="${(x - mw / 2).toFixed(1)}" y="2" width="${mw.toFixed(1)}" height="${H - 4}" rx="2"><title>${esc(d)}: ${esc(sigText(sigs))}</title></rect>`;
   }).join('');
@@ -333,27 +361,33 @@ function card(r, dir) {
     <div class="detail"><span class="mono">MACD ${fmt(r.macd)}, signal ${fmt(r.signal)}, histogram ${fmt(r.hist)}</span> (${r.pctOfPrice.toFixed(2)}% of price), ${r.side} signal by ${Math.abs(r.hist).toFixed(3)}, histogram ${r.trend}.${detail ? ' ' + esc(detail) + '.' : ''}</div>
   </div>`;
 }
+// Compare two sort values: arrays element by element (a rank), anything else directly.
+function cmpVal(x, y) {
+  if (Array.isArray(x)) { for (let k = 0; k < x.length; k++) if (x[k] !== y[k]) return x[k] < y[k] ? -1 : 1; return 0; }
+  return x < y ? -1 : x > y ? 1 : 0;
+}
 function sortRows(rows, key, days) {
   const s = SORT[key];
   const val = r => ({
     symbol: r.sym, name: r.name.toLowerCase(), today: rank(r), rsi: r.rsi, off: r.pct,
     macd: (r.hist >= 0 ? 0 : 2) + (r.trend === 'rising' ? 0 : 1), hist: r.hist, close: r.close,
     recent: recentCount(r, days), default: rank(r)})[s.col];
-  const cmp = (a, b) => {
-    const x = val(a), y = val(b);
-    if (Array.isArray(x)) { for (let k = 0; k < x.length; k++) if (x[k] !== y[k]) return x[k] < y[k] ? -1 : 1; return 0; }
-    return x < y ? -1 : x > y ? 1 : 0;
-  };
-  rows.sort((a, b) => (s.asc ? 1 : -1) * cmp(a, b) || a.sym.localeCompare(b.sym));
+  rows.sort((a, b) => (s.asc ? 1 : -1) * cmpVal(val(a), val(b)) || a.sym.localeCompare(b.sym));
   return rows;
 }
+// Table header cells for a sortable table: cols is [[column key, label], ...], key names the SORT entry.
+// The label is a real button so the header can be sorted from the keyboard as well as by mouse.
+function sortHeaders(cols, key) {
+  const sort = SORT[key];
+  return cols.map(([k, label]) => `<th class="${sort.col === k ? 'sorted ' + (sort.asc ? 'asc' : '') : ''}"${sort.col === k ? ` aria-sort="${sort.asc ? 'ascending' : 'descending'}"` : ''}><button type="button" class="sorth" data-key="${key}" data-col="${k}" title="Sort by ${label}">${label}</button></th>`).join('');
+}
+function rsiCell(r) { return `<td class="num">${isNum(r.rsi) ? r.rsi.toFixed(0) : '–'}<span class="bar"><i class="${rsiClass(r.rsi)}" style="width:${isNum(r.rsi) ? r.rsi.toFixed(1) : 0}%"></i></span></td>`; }
+function pctCell(r) { return `<td class="num">${fmtPct(r.pct)}<span class="bar"><i style="width:${Math.max(0, 100 - r.pct).toFixed(1)}%"></i></span></td>`; }
 function tableHTML(rows, key, days) {
   const cols = [
     ['symbol', 'Ticker'], ['name', 'Name'], ['today', 'Signal'], ['macd', 'MACD vs signal'], ['hist', `Histogram (${rangeLabel()})`],
     ['close', 'Close'], ['rsi', 'RSI'], ['off', '% below 1-yr high'], ['recent', `Recent (${rangeLabel()})`]];
-  const sort = SORT[key];
-  // The label is a real button so the header can be sorted from the keyboard as well as by mouse.
-  const ths = cols.map(([k, label]) => `<th class="${sort.col === k ? 'sorted ' + (sort.asc ? 'asc' : '') : ''}"${sort.col === k ? ` aria-sort="${sort.asc ? 'ascending' : 'descending'}"` : ''}><button type="button" class="sorth" data-key="${key}" data-col="${k}" title="Sort by ${label}">${label}</button></th>`).join('');
+  const ths = sortHeaders(cols, key);
   const body = rows.map(r => {
     const t = r.sigs.length ? r.sigs.map(badge).join(' ') : '<span class="sub">–</span>';
     const rc = hasDir(r, 'PEAK') ? 'has-peak' : hasDir(r, 'VALLEY') ? 'has-valley' : '';
@@ -364,9 +398,9 @@ function tableHTML(rows, key, days) {
       <td>${r.side}, ${r.trend}</td>
       <td>${spark(r, S.rangeN)}</td>
       <td class="num">${fmtClose(r.close)}</td>
-      <td class="num">${isNum(r.rsi) ? r.rsi.toFixed(0) : '–'}<span class="bar"><i class="${rsiClass(r.rsi)}" style="width:${isNum(r.rsi) ? r.rsi.toFixed(1) : 0}%"></i></span></td>
-      <td class="num">${fmtPct(r.pct)}<span class="bar"><i style="width:${Math.max(0, 100 - r.pct).toFixed(1)}%"></i></span></td>
-      <td>${strip(r, days, S.rangeN)}</td>
+      ${rsiCell(r)}
+      ${pctCell(r)}
+      <td>${strip(d => eventsOn(r.f, d), days, S.rangeN)}</td>
     </tr>`;
   }).join('');
   return `<table><thead><tr>${ths}</tr></thead><tbody>${body}</tbody></table>`;
@@ -380,7 +414,7 @@ function renderDash() {
   if (S.indexError) { dashMessage(`<div class="notice error"><p>${esc(INDEX_ERROR)}</p><p class="sub">Technical detail: ${esc(S.indexError)}</p></div>`); return; }
   if (!listed().length) { dashMessage('<div class="notice"><p>No tickers yet. Open <b>My list</b> to enter the tickers you own and the ones you are watching, or load an example list.</p><p><button class="primary" data-goto="list">Open My list</button></p></div>'); return; }
   if (!S.day) {
-    const unknown = unknownListed(), failed = Object.keys(S.fileErrors);
+    const unknown = unknownListed(), failed = failedListed();
     if (S.loadToken && !knownListed().length) dashMessage(`<div class="notice"><p>None of the tickers on your list are in the data set yet.</p><p>Not in the data set: ${esc(unknown.join(', '))}. Ask the site owner to add it to universe.txt.</p><p><button data-goto="list">Open My list</button></p></div>`);
     else if (failed.length) dashMessage(`<div class="notice error"><p>The data files for your tickers could not be loaded (${esc(failed.join(', '))}). Try again in a minute; if it keeps happening, the nightly job may have a problem.</p></div>`);
     else dashMessage('<div class="notice"><p>Loading…</p></div>');
@@ -421,7 +455,7 @@ function renderDash() {
   [['holdings', missing.filter(isHolding)], ['watch', missing.filter(s => !isHolding(s))]].forEach(([id, m]) => {
     if (m.length) $(id).insertAdjacentHTML('beforeend', `<p class="sub">No data on or before this day for: ${esc(m.join(', '))}.</p>`);
   });
-  const failed = Object.keys(S.fileErrors).filter(known);
+  const failed = failedListed();
   if (failed.length) $('watch').insertAdjacentHTML('beforeend', `<p class="err">Could not load the data file for: ${esc(failed.join(', '))}. These tickers are left out until the page is reloaded.</p>`);
 
   // Timeline: every listed ticker that fired within the range, newest day on the right.
@@ -447,21 +481,48 @@ function renderDash() {
 // ---- chart ---------------------------------------------------------------
 function chartSyms() {
   const all = loadedListed();
-  return S.lists.h.filter(s => all.includes(s)).concat(S.lists.w.filter(s => all.includes(s)));
+  const syms = S.lists.h.filter(s => all.includes(s)).concat(S.lists.w.filter(s => all.includes(s)));
+  // A ticker opened from the Screener is shown too, even though it is not on the viewer's lists.
+  if (S.chartSym && S.files[S.chartSym] && !syms.includes(S.chartSym)) syms.push(S.chartSym);
+  return syms;
+}
+function chartLabel(s) { return isHolding(s) ? '' : S.lists.w.includes(s) ? ' (watch)' : ' (screener)'; }
+// Open a ticker on the Charts tab; a Screener ticker's file is fetched first if it is not loaded yet.
+async function openChart(sym) {
+  S.chartSym = sym;
+  const need = !S.files[sym] && known(sym);
+  S.chartPending = need ? sym : null;  // a loaded ticker shows at once, even if another one is still being fetched
+  showTab('chart'); window.scrollTo({top: 0});
+  if (!need) return;
+  await loadFiles([sym]);
+  if (S.chartPending !== sym) return;  // the viewer opened something else meanwhile
+  S.chartPending = null;
+  if (S.tab === 'chart') renderChart();
 }
 function renderChart() {
   const box = $('chartbox');
+  if (S.chartPending) {  // a Screener ticker whose file is still on its way
+    $('chartsym').innerHTML = `<option>${esc(S.chartPending)}</option>`; $('chartmeta').textContent = '';
+    box.innerHTML = `<div class="empty">Loading data for ${esc(S.chartPending)}…</div>`;
+    return;
+  }
   const syms = chartSyms();
+  if (S.chartSym && !syms.includes(S.chartSym) && S.fileErrors[S.chartSym]) {  // a Screener ticker whose file failed
+    $('chartsym').innerHTML = `<option>${esc(S.chartSym)}</option>`; $('chartmeta').textContent = '';
+    box.innerHTML = `<div class="empty">Could not load the data file for ${esc(S.chartSym)} (${esc(S.fileErrors[S.chartSym])}). Try again in a minute.</div>`;
+    return;
+  }
   if (!syms.length) {
     $('chartsym').innerHTML = ''; $('chartmeta').textContent = '';
     box.innerHTML = `<div class="empty">${S.indexError ? esc(INDEX_ERROR) : 'No tickers with data yet. Add some on the My list tab.'}</div>`;
     return;
   }
   if (!S.chartSym || !syms.includes(S.chartSym)) S.chartSym = syms[0];
-  $('chartsym').innerHTML = syms.map(s => `<option value="${esc(s)}"${s === S.chartSym ? ' selected' : ''}>${esc(s)}${isHolding(s) ? '' : ' (watch)'}</option>`).join('');
+  $('chartsym').innerHTML = syms.map(s => `<option value="${esc(s)}"${s === S.chartSym ? ' selected' : ''}>${esc(s)}${chartLabel(s)}</option>`).join('');
   const f = S.files[S.chartSym];
-  const r = row(S.chartSym, S.day);
-  if (!r) { box.innerHTML = `<div class="empty">No data for ${esc(S.chartSym)} on or before ${esc(S.day)}.</div>`; $('chartmeta').textContent = ''; return; }
+  const day = S.day || f.dates[f.dates.length - 1];  // no lists yet (Screener only): the ticker's own newest day
+  const r = row(S.chartSym, day);
+  if (!r) { box.innerHTML = `<div class="empty">No data for ${esc(S.chartSym)} on or before ${esc(day)}.</div>`; $('chartmeta').textContent = ''; return; }
   const end = r.i + 1, start = Math.max(0, end - S.rangeN);
   const D = f.dates.slice(start, end), C = f.close.slice(start, end), M = f.macd.slice(start, end),
     Sg = f.signal.slice(start, end), Hs = f.hist.slice(start, end), Rs = f.rsi.slice(start, end);
@@ -544,6 +605,196 @@ function renderChart() {
 function macdLabel() { const p = S.index && S.index.params || {}; return `${p.fast || 12}/${p.slow || 26}/${p.signal || 9}`; }
 function rsiLabel() { const p = S.index && S.index.params || {}; return `(${p.rsi || 14})`; }
 
+// ---- screener: every ticker that fired on the latest day ------------------
+// The filters live in S.screenF and in localStorage "macd-screen". The controls are static
+// HTML; syncScreenControls() writes the settings into them and readScreenControls() reads
+// them back after a change. The table is rebuilt from S.screen (screener.json) each time.
+function validScreener(d) { return !!(d && typeof d === 'object' && d.tickers && typeof d.tickers === 'object' && typeof d.last_bar === 'string'); }
+function screenGroups() { return S.screen && Array.isArray(S.screen.groups) ? S.screen.groups.filter(g => typeof g === 'string') : []; }
+function dirOf(F) { return F.show === 'peak' ? 'PEAK' : 'VALLEY'; }
+// A valid filter set from anything (stored JSON, the controls); unknown or missing values fall
+// back to the defaults. The RSI value must be one of the choices for the current Show setting.
+function cleanScreenF(o) {
+  const f = Object.assign({}, SCREEN_DEFAULTS);
+  if (!o || typeof o !== 'object') return f;
+  if (SHOWS.includes(o.show)) f.show = o.show;
+  if ([0, 2, 3].includes(+o.stage)) f.stage = +o.stage;
+  f.rsi = RSI_OPTS[f.show].some(x => x[0] === +o.rsi) ? +o.rsi : RSI_DEFAULT[f.show];
+  if ([5, 10, 21].includes(+o.within)) f.within = +o.within;
+  if ([0, 5, 10, 20, 30].includes(+o.below)) f.below = +o.below;
+  // The group is kept as text: screener.json (which lists the groups) may not be loaded yet.
+  if (typeof o.group === 'string' && o.group.length <= 60) f.group = o.group;
+  if (typeof o.choppy === 'boolean') f.choppy = o.choppy;
+  if (typeof o.notmine === 'boolean') f.notmine = o.notmine;
+  return f;
+}
+function readStoredScreen() { try { return cleanScreenF(JSON.parse(lsGet('macd-screen') || 'null')); } catch (e) { return cleanScreenF(null); } }
+function storeScreen() { lsSet('macd-screen', JSON.stringify(S.screenF)); }
+function activeGroup(F) { return screenGroups().includes(F.group) ? F.group : 'all'; }
+function syncScreenControls() {
+  const F = S.screenF, groups = screenGroups(), g = activeGroup(F);
+  $('sc-show').value = F.show;
+  $('sc-within-wrap').hidden = F.show !== 'recover';
+  $('sc-within').value = String(F.within);
+  $('sc-stage').value = String(F.stage);
+  $('sc-stage').disabled = F.show === 'recover';  // a recovery is a stage-3 event by definition
+  $('sc-rsi').innerHTML = RSI_OPTS[F.show].map(([v, label]) => `<option value="${v}"${v === F.rsi ? ' selected' : ''}>${label}</option>`).join('');
+  $('sc-below').value = String(F.below);
+  $('sc-group').innerHTML = ['all'].concat(groups).map(x => `<option value="${esc(x)}"${x === g ? ' selected' : ''}>${x === 'all' ? 'All groups' : esc(x)}</option>`).join('');
+  $('sc-choppy').checked = F.choppy;
+  $('sc-mine').checked = F.notmine;
+}
+function readScreenControls() {
+  S.screenF = cleanScreenF({show: $('sc-show').value, stage: $('sc-stage').value, rsi: $('sc-rsi').value, within: $('sc-within').value,
+    // Until screener.json is in, the Group select only has "All groups"; keep the remembered group then.
+    below: $('sc-below').value, group: screenGroups().length ? $('sc-group').value : S.screenF.group,
+    choppy: $('sc-choppy').checked, notmine: $('sc-mine').checked});
+  storeScreen();
+  renderScreen();
+}
+async function loadScreener() {
+  if (S.screen || S.screenLoading || !S.indexDone) return;  // init() calls again once index.json is in
+  S.screenLoading = true;
+  renderScreen();
+  try {
+    const v = encodeURIComponent(S.index && S.index.generated ? S.index.generated : '');
+    const d = await fetchJSON('data/screener.json?v=' + v);
+    if (!validScreener(d)) throw new Error('screener.json has an unexpected format');
+    S.screen = d; S.screenError = null;
+  } catch (e) { S.screenError = String(e && e.message || e); }
+  S.screenLoading = false;
+  if (S.tab === 'screen') renderScreen();
+}
+// One screener.json entry as a row object (same field names as row() where they overlap, so the
+// badge, bar and strip helpers work on it). Bad values are made harmless rather than trusted.
+function screenRow(sym, e) {
+  if (!e || typeof e !== 'object') return null;
+  const sigsOf = a => (Array.isArray(a) ? a.map(p => Array.isArray(p) ? {dir: p[0], stage: p[1]} : null) : []).filter(validSig);
+  const recent = {};
+  if (e.recent && typeof e.recent === 'object') Object.keys(e.recent).forEach(d => { recent[d] = sigsOf(e.recent[d]); });
+  const c = e.cross;
+  const cross = c && typeof c === 'object' && (c.dir === 'PEAK' || c.dir === 'VALLEY') && isNum(c.days) ? {dir: c.dir, date: String(c.date || ''), days: c.days} : null;
+  const date = typeof e.last_bar === 'string' ? e.last_bar : '';
+  return {
+    sym, name: String(e.name || ''), group: typeof e.group === 'string' ? e.group : 'Other stocks',
+    date, stale: !!e.stale || (!!date && date < S.screen.last_bar),
+    close: e.close, rsi: isNum(e.rsi) ? e.rsi : NaN, hist: isNum(e.hist) ? e.hist : NaN,
+    weak: !!e.weak, pct: isNum(e.pct_below_high) ? e.pct_below_high : 0, chg1: e.chg_1m, chg3: e.chg_3m,
+    side: e.side === 'below' ? 'below' : 'above', trend: ['rising', 'falling', 'flat'].includes(e.trend) ? e.trend : 'flat',
+    macdDir: e.macd_dir, sigs: sigsOf(e.today), recent, cross,
+    listed: listed().includes(sym), holding: isHolding(sym),
+  };
+}
+function screenMatch(r, F) {
+  if (F.show === 'recover') {
+    // Momentum crossed up recently and is still going: a confirmed valley within the window,
+    // histogram still positive, MACD line still rising. The stage setting does not apply.
+    if (!r.cross || r.cross.dir !== 'VALLEY' || r.cross.days > F.within || !(r.hist > 0) || r.macdDir !== 'rising') return false;
+  } else {
+    const stage = F.show === 'all' ? maxStage(r.sigs) : (topSignal(r.sigs, dirOf(F)) || {stage: 0}).stage;
+    if (!stage || stage < F.stage) return false;
+  }
+  if (F.rsi) {  // "below 40" for valleys and recoveries, "above 60" for peaks; no RSI never matches
+    if (!isNum(r.rsi)) return false;
+    if (F.show === 'peak' ? r.rsi <= F.rsi : r.rsi >= F.rsi) return false;
+  }
+  if (F.below && !(r.pct >= F.below)) return false;
+  const g = activeGroup(F);
+  if (g !== 'all' && r.group !== g) return false;
+  if (F.choppy && r.weak) return false;
+  if (F.notmine && r.listed) return false;
+  return true;
+}
+// Default order: strongest stage first, then RSI (lowest first for valleys, highest first for
+// peaks), then furthest below the high; for Recovering the most recent crossover first, then RSI.
+function screenRank(r, F) {
+  if (F.show === 'recover') return [r.cross ? r.cross.days : 99, isNum(r.rsi) ? r.rsi : 101];
+  const stage = F.show === 'all' ? maxStage(r.sigs) : (topSignal(r.sigs, dirOf(F)) || {stage: 0}).stage;
+  const rsi = isNum(r.rsi) ? r.rsi : (F.show === 'peak' ? -1 : 101);
+  return [-stage, F.show === 'peak' ? -rsi : rsi, -r.pct];
+}
+function sortScreen(rows, F) {
+  const s = SORT.screen;
+  const val = r => ({
+    symbol: r.sym, name: r.name.toLowerCase(), group: r.group,
+    // Signal: the stage shown; for Recovering the crossover's age (more recent = "stronger")
+    signal: F.show === 'recover' ? (r.cross ? -r.cross.days : -99) : F.show === 'all' ? maxStage(r.sigs) : (topSignal(r.sigs, dirOf(F)) || {stage: 0}).stage,
+    macd: (r.side === 'above' ? 0 : 2) + (r.trend === 'rising' ? 0 : 1),
+    close: isNum(r.close) ? r.close : -1, rsi: isNum(r.rsi) ? r.rsi : -1, off: r.pct,
+    chg1: isNum(r.chg1) ? r.chg1 : -Infinity, chg3: isNum(r.chg3) ? r.chg3 : -Infinity,
+    recent: Object.keys(r.recent).filter(d => r.recent[d].length).length, default: screenRank(r, F)})[s.col];
+  rows.sort((a, b) => (s.asc ? 1 : -1) * cmpVal(val(a), val(b)) || a.sym.localeCompare(b.sym));
+  return rows;
+}
+// The last 21 trading days ending on the screener's last bar. screener.json carries no calendar,
+// so the days are the loaded tickers' days plus every day any screened ticker fired, which with
+// ~800 tickers is every trading day.
+function screenDays() {
+  const sc = S.screen, set = new Set(S.days);
+  Object.keys(sc.tickers).forEach(s => { const rc = sc.tickers[s] && sc.tickers[s].recent; if (rc && typeof rc === 'object') Object.keys(rc).forEach(d => set.add(d)); });
+  set.add(sc.last_bar);
+  return [...set].filter(d => typeof d === 'string' && d <= sc.last_bar).sort().slice(-SCREEN_BARS);
+}
+function fmtChg(v) { return isNum(v) ? `<span class="${v > 0 ? 'up' : v < 0 ? 'down' : ''}">${fmt(v, 1)}%</span>` : '–'; }
+function crossChip(c) {
+  const when = c.days === 0 ? 'on the latest day' : c.days === 1 ? '1 day ago' : `${c.days} days ago`;
+  return ` <span class="badge days" title="Confirmed valley crossover on ${esc(c.date)}">crossed up ${when}</span>`;
+}
+function screenTableHTML(rows, days, F) {
+  const cols = [['symbol', 'Ticker'], ['name', 'Name'], ['group', 'Group'], ['signal', 'Signal'], ['macd', 'MACD vs signal'],
+    ['close', 'Close'], ['rsi', 'RSI'], ['off', '% below 1-yr high'], ['chg1', '1M change'], ['chg3', '3M change'], ['recent', `Recent (${SCREEN_BARS}D)`]];
+  const ths = sortHeaders(cols, 'screen') + '<th></th>';
+  const body = rows.map(r => {
+    const t = r.sigs.length ? r.sigs.slice().sort((a, b) => a.stage - b.stage).map(badge).join(' ') : '<span class="sub">–</span>';
+    const chip = F.show === 'recover' && r.cross ? crossChip(r.cross) : '';
+    const rc = hasDir(r, 'PEAK') ? 'has-peak' : hasDir(r, 'VALLEY') ? 'has-valley' : '';
+    const star = r.listed ? ' <span class="badge flag" title="On your list">★</span>' : '';
+    const add = r.listed ? '' : `<button type="button" class="addwatch" data-sym="${esc(r.sym)}" title="Add ${esc(r.sym)} to your watch list">Add to watch</button>`;
+    return `<tr class="${rc}">
+      <td><b>${symlink(r.sym)}</b>${r.weak ? ' <span class="badge choppy">choppy</span>' : ''}${staleBadge(r)}${star}</td>
+      <td class="name" title="${esc(r.name)}">${esc(r.name)}</td>
+      <td>${esc(r.group)}</td>
+      <td>${t}${chip}</td>
+      <td>${r.side}, ${r.trend}</td>
+      <td class="num">${fmtClose(r.close)}</td>
+      ${rsiCell(r)}
+      ${pctCell(r)}
+      <td class="num">${fmtChg(r.chg1)}</td>
+      <td class="num">${fmtChg(r.chg3)}</td>
+      <td>${strip(d => r.recent[d] || [], days, SCREEN_BARS)}</td>
+      <td>${add}</td>
+    </tr>`;
+  }).join('');
+  return `<table><thead><tr>${ths}</tr></thead><tbody>${body}</tbody></table>`;
+}
+function renderScreen() {
+  const box = $('screen-body'), st = $('screen-status'), sc = S.screen;
+  syncScreenControls();
+  st.textContent = S.screenLoading ? 'Loading the screener data…' : ''; st.hidden = !S.screenLoading;
+  // The note says what the rows are: under Recovering most rows did not fire on the last day
+  // (their crossover was up to N days earlier), so that mode gets its own sentence.
+  const asOf = sc ? sc.last_bar + ', the last completed trading day' : 'the last completed trading day';
+  $('screen-note').textContent = S.screenF.show === 'recover'
+    ? `Tickers whose confirmed valley crossover was within the last ${S.screenF.within} trading days and whose momentum is still rising, as of ${asOf}. The day picker does not apply here.`
+    : `Every ticker in the data set that fired on ${asOf}. The day picker does not apply here.`;
+  if (!sc) {
+    $('screen-count').textContent = '';
+    box.innerHTML = S.screenError ? `<div class="notice error"><p>${esc(SCREEN_ERROR)}</p><p class="sub">Technical detail: ${esc(S.screenError)}</p></div>` : '';
+    return;
+  }
+  const F = S.screenF;
+  const all = Object.keys(sc.tickers).map(s => screenRow(s, sc.tickers[s])).filter(Boolean);
+  const rows = sortScreen(all.filter(r => screenMatch(r, F)), F);
+  $('screen-count').textContent = `${rows.length} of ${Object.keys(sc.tickers).length} tickers match`;
+  if (!rows.length) { box.innerHTML = `<div class="empty">No tickers match these filters on ${esc(sc.last_bar)}.</div>`; return; }
+  box.innerHTML = screenTableHTML(rows.slice(0, SCREEN_CAP), screenDays(), F) +
+    (rows.length > SCREEN_CAP ? `<p class="sub">Showing the first ${SCREEN_CAP} of ${rows.length} matches; add a filter.</p>` : '');
+}
+function addToWatch(sym) {
+  if (!SYM_RE.test(sym) || listed().includes(sym)) return;
+  applyLists({h: S.lists.h, w: S.lists.w.concat([sym])}, '', true);  // stay on the Screener
+}
+
 // ---- header, editor, footer, banner --------------------------------------
 function renderControls() {
   const sel = $('daysel');
@@ -563,7 +814,7 @@ function renderEditor() {
   if (S.editorNote) msgs.push(`<div class="msg warn">${esc(S.editorNote)}</div>`);
   const unknown = unknownListed();
   if (unknown.length) msgs.push(`<div class="msg warn">Not in the data set: ${esc(unknown.join(', '))}. Ask the site owner to add it to universe.txt.</div>`);
-  const failed = Object.keys(S.fileErrors).filter(known);
+  const failed = failedListed();
   if (failed.length) msgs.push(`<div class="msg warn">Could not load the data file for: ${esc(failed.map(s => `${s} (${S.fileErrors[s]})`).join(', '))}. Reload the page to try again.</div>`);
   const stale = knownListed().filter(indexStale);
   if (stale.length) msgs.push(`<div class="msg ok">Data from an earlier night for: ${esc(stale.map(s => `${s} (${S.index.tickers[s].last_bar || 'unknown date'})`).join(', '))}. Last night's download for these failed, so the previous file was kept.</div>`);
@@ -602,6 +853,7 @@ function renderBanner() {
 function render() {
   renderControls();
   renderDash();
+  if (S.tab === 'screen') renderScreen();
   if (S.tab === 'chart') renderChart();
   renderEditor();
   renderFooter();
@@ -612,6 +864,7 @@ function showTab(t) {
   S.tab = t;
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
   TABS.forEach(k => { $('view-' + k).hidden = k !== t; });
+  if (t === 'screen') { renderScreen(); loadScreener(); }
   if (t === 'chart') renderChart();
   if (t === 'list') renderEditor();
   lsSet('macd-tab', t);
@@ -627,15 +880,19 @@ document.addEventListener('click', e => {
   const go = e.target.closest('button[data-goto]');
   if (go) { showTab(go.dataset.goto); return; }
   const sl = e.target.closest('.symlink');
-  if (sl) { S.chartSym = sl.dataset.sym; showTab('chart'); window.scrollTo({top: 0}); return; }
+  if (sl) { openChart(sl.dataset.sym); return; }
+  const aw = e.target.closest('.addwatch');
+  if (aw) { addToWatch(aw.dataset.sym); return; }
   const cell = e.target.closest('th');
   const th = cell && cell.querySelector('.sorth');  // the sort button; a click anywhere in the cell counts
   if (th) {
     const s = SORT[th.dataset.key];
-    if (s.col === th.dataset.col) s.asc = !s.asc; else { s.col = th.dataset.col; s.asc = !['rsi', 'close', 'recent'].includes(th.dataset.col); }
+    // Numeric "more is more interesting" columns start descending, the rest ascending.
+    if (s.col === th.dataset.col) s.asc = !s.asc; else { s.col = th.dataset.col; s.asc = !['rsi', 'close', 'recent', 'signal', 'chg1', 'chg3'].includes(th.dataset.col); }
     render();
   }
 });
+['sc-show', 'sc-stage', 'sc-rsi', 'sc-within', 'sc-below', 'sc-group', 'sc-choppy', 'sc-mine'].forEach(id => $(id).addEventListener('change', readScreenControls));
 $('daysel').addEventListener('change', e => setDay(e.target.value));
 $('prev').addEventListener('click', () => { const i = S.days.indexOf(S.day); if (i > 0) setDay(S.days[i - 1]); });
 $('next').addEventListener('click', () => { const i = S.days.indexOf(S.day); if (i >= 0 && i < S.days.length - 1) setDay(S.days[i + 1]); });
@@ -664,6 +921,7 @@ $('theme').addEventListener('click', () => {
 async function init() {
   const t = lsGet('macd-theme'); if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
   const r = +lsGet('macd-range'); if (RANGES.some(x => x[1] === r)) S.rangeN = r;
+  S.screenF = readStoredScreen();
   initLists();
   fillEditor();
   writeHash();  // the address bar always holds the shareable link
@@ -671,6 +929,8 @@ async function init() {
   showTab(listed().length ? (TABS.includes(tab) ? tab : 'dash') : 'list');
   renderControls(); renderEditor(); renderFooter();
   await loadIndex();
+  S.indexDone = true;
+  if (S.tab === 'screen') loadScreener();  // the Screener was the remembered tab: it waited for index.json
   await refresh();
 }
 init();
