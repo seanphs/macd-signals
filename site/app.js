@@ -3,7 +3,7 @@
    (both written by the nightly job), plus data/screener.json for the Screener tab, keeps the
    viewer's lists in the page address and in this browser, keeps the viewer's optional holding
    details (shares, cost, dates, targets) in this browser only, and draws the dashboard, the
-   screener, the charts and the glossary.
+   screener, the charts (each with the ticker's track record) and the glossary.
    Nothing here is advice: the page only describes what an indicator is doing. */
 'use strict';
 (function () {
@@ -41,6 +41,13 @@ const HOLD_FIELDS = [['shares', 'Shares'], ['cost', 'Avg cost'], ['date', 'Bough
 const NEAR_PCT = 3;                               // "Your targets and stops" lists holdings within this percent of a level
 const MONTH_BARS = 21;                            // trading days in "1M" (the vs SPY comparison)
 const LONG_TERM_DAYS = 366;                       // held this many calendar days or more = more than one year
+// Track record (Charts tab, and the holdings table's "Peak record (10d)" column): what the close
+// did 5, 10 and 20 trading days after each past signal, next to what it did on an ordinary day.
+const HORIZONS = [5, 10, 20];                     // trading days after a signal
+const RECORD_GROUPS = [['PEAK', 1], ['PEAK', 2], ['PEAK', 3], ['VALLEY', 1], ['VALLEY', 2], ['VALLEY', 3]];
+const RECORD_MIN = 5;                             // outcomes a group needs before its numbers are shown in full
+const PEAK_RECORD_H = 10;                         // the horizon the holdings column uses
+const TOO_FEW = 'Too few signals to judge';
 
 // ---- state ---------------------------------------------------------------
 const S = {
@@ -399,7 +406,11 @@ async function refresh() {
 // ---- trading days and derived values -------------------------------------
 function buildDays() {
   const set = new Set();
-  loadedListed().forEach(sym => { const f = S.files[sym]; f.dates.forEach((d, i) => { if (isNum(f.macd[i])) set.add(d); }); });
+  // The listed tickers' days, plus the chart ticker's when it is not on the lists (opened from the
+  // Screener), so the day picker and the Track record's date buttons can reach every day its chart can show.
+  const syms = loadedListed();
+  if (S.chartSym && S.files[S.chartSym] && !syms.includes(S.chartSym)) syms.push(S.chartSym);
+  syms.forEach(sym => { const f = S.files[sym]; f.dates.forEach((d, i) => { if (isNum(f.macd[i])) set.add(d); }); });
   S.days = [...set].sort();
   if (!S.days.length) { S.day = null; return; }
   if (!S.day || !set.has(S.day)) S.day = (S.index && set.has(S.index.last_bar)) ? S.index.last_bar : S.days[S.days.length - 1];
@@ -513,6 +524,7 @@ function holdCell(r, k, day) {
     case 'stop': return `<td class="num"${isNum(p.stopPrice) ? ` title="${stopTitle(p)}"` : ''}>${stopText(p)}</td>`;
     case 'held': return `<td${p.date ? ` title="Bought ${esc(p.date)}${isNum(p.heldDays) ? ', ' + p.heldDays + ' days ago' : ''}"` : ''}>${isNum(p.heldDays) ? fmtHeld(p.date, day, p.heldDays) + (p.longTerm ? ' <span class="badge lt">long-term</span>' : '') : '–'}</td>`;
     case 'spy': return `<td class="num" title="This ticker's 1-month change minus SPY's, in percentage points">${signedCell(p.vsSpy1m, ' pts')}</td>`;
+    case 'record': return recordCell(r);
   }
   return '<td>–</td>';
 }
@@ -567,6 +579,128 @@ function targetChips(hold) {
   });
   return chips;
 }
+// ---- track record: what the close did after past signals ------------------
+// Everything here is computed from the ticker file up to the selected day's bar (i), so the
+// record only ever uses closes the viewer can see on the chart. It describes the past.
+function firstMacd(f) { return f.macd.findIndex(isNum); }  // the first bar with a MACD value; -1 if none
+function median(a) {
+  if (!a.length) return null;
+  const s = a.slice().sort((x, y) => x - y), m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+// The close h bars after bar k as a percent change; null when that bar is past the selected
+// day's bar i, because the outcome is not known yet.
+function moveAfter(f, k, h, i) {
+  return k + h <= i && isNum(f.close[k]) && f.close[k] > 0 && isNum(f.close[k + h]) ? (f.close[k + h] / f.close[k] - 1) * 100 : null;
+}
+function isHit(dir, chg) { return dir === 'PEAK' ? chg < 0 : chg > 0; }  // an unchanged close is a miss either way
+function tally(dir, moves) { return {outcomes: moves.length, hits: moves.filter(c => isHit(dir, c)).length, median: median(moves)}; }
+// The whole record for one ticker up to bar i: one entry per (direction, stage) group, in
+// RECORD_GROUPS order, with its signals and a tally per horizon, plus the base rates: over every
+// bar from the first MACD value on, how often the close was lower / higher h bars later.
+function trackRecord(f, i) {
+  const groups = RECORD_GROUPS.map(([dir, stage]) => ({dir, stage, signals: [], hz: {}}));
+  for (let k = 0; k <= i; k++) {
+    const seen = new Set();  // each (direction, stage) counts once per day
+    eventsOn(f, f.dates[k]).forEach(s => {
+      const key = s.dir + s.stage;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const moves = {};
+      HORIZONS.forEach(h => { moves[h] = moveAfter(f, k, h, i); });
+      groups[RECORD_GROUPS.findIndex(([d, st]) => d === s.dir && st === s.stage)].signals.push({k, date: f.dates[k], close: f.close[k], moves});
+    });
+  }
+  groups.forEach(g => HORIZONS.forEach(h => { g.hz[h] = tally(g.dir, g.signals.map(s => s.moves[h]).filter(isNum)); }));
+  const first = firstMacd(f), base = {};
+  HORIZONS.forEach(h => {
+    const moves = [];
+    if (first >= 0) for (let k = first; k + h <= i; k++) { const c = moveAfter(f, k, h, i); if (isNum(c)) moves.push(c); }
+    base[h] = {days: moves.length, lower: moves.filter(c => c < 0).length, higher: moves.filter(c => c > 0).length, median: median(moves)};
+  });
+  return {groups, base, days: first >= 0 ? i - first + 1 : 0};
+}
+// The base rate a group is compared with: "lower" for peaks, "higher" for valleys, in percent.
+function baseRate(base, dir, h) { const b = base[h]; return b.days ? (dir === 'PEAK' ? b.lower : b.higher) / b.days * 100 : null; }
+function pctOf(n, d) { return d ? Math.round(n / d * 100) : 0; }
+function moveText(v) { return !isNum(v) ? '–' : v === 0 ? '0.0%' : fmt(v, 1) + '%'; }  // a signed percent, one decimal
+function fmtMove(v) { return isNum(v) ? `<span class="${upDown(v)}">${moveText(v)}</span>` : '–'; }  // the same in the up/down colors
+// The "4 of 6" hit-rate cell for a group that has signals, at horizon h. No outcome yet (every
+// signal is younger than h bars): a dash that says so. Under RECORD_MIN outcomes the numbers are
+// muted and the only title is the warning; otherwise the title spells out hits, outcomes,
+// percent and base rate.
+function rateCell(hits, outcomes, base, h) {
+  const text = `${hits} of ${outcomes}`;
+  if (!outcomes) return `<td class="num" title="No outcome yet: every signal is less than ${h} trading days old"><span class="sub">–</span></td>`;
+  if (outcomes < RECORD_MIN) return `<td class="num"><span class="sub" title="${TOO_FEW}">${text}</span></td>`;
+  return `<td class="num" title="${hits} hits of ${outcomes} outcomes (${pctOf(hits, outcomes)}%); base rate ${isNum(base) ? Math.round(base) + '%' : '–'}">${text}</td>`;
+}
+function moveCell(med, outcomes) {
+  if (!isNum(med)) return '<td class="num"><span class="sub">–</span></td>';
+  if (outcomes < RECORD_MIN) return `<td class="num"><span class="sub" title="${TOO_FEW}">${moveText(med)}</span></td>`;
+  return `<td class="num">${fmtMove(med)}</td>`;
+}
+// The two cells of a base-rate row for one horizon: "130 of 200" (days the close was lower or
+// higher h bars later, out of the days that have an outcome) and the median move over those days.
+function baseCells(b, which, h) {
+  const n = b[which], text = `${n} of ${b.days}`;
+  if (b.days < RECORD_MIN) return `<td class="num"><span class="sub" title="${TOO_FEW}">${text}</span></td>` + moveCell(b.median, b.days);
+  return `<td class="num" title="The close was ${which} ${h} trading days later on ${n} of ${b.days} days (${pctOf(n, b.days)}%)">${text}</td>` + moveCell(b.median, b.days);
+}
+function recordTableHTML(rec) {
+  const head = `<thead><tr><th rowspan="2">Signal</th><th rowspan="2" class="num">Count</th>${HORIZONS.map(h => `<th colspan="2" class="mid">${h} trading days later</th>`).join('')}</tr>
+    <tr>${HORIZONS.map(() => '<th class="num">Hit rate</th><th class="num">Median move</th>').join('')}</tr></thead>`;
+  const rows = rec.groups.map(g => {
+    const n = g.signals.length;
+    const cells = n ? HORIZONS.map(h => rateCell(g.hz[h].hits, g.hz[h].outcomes, baseRate(rec.base, g.dir, h), h) + moveCell(g.hz[h].median, g.hz[h].outcomes)).join('')
+      : HORIZONS.map(() => '<td class="num">–</td><td class="num">–</td>').join('');
+    return `<tr><td>${badge(g)}</td><td class="num">${n || '–'}</td>${cells}</tr>`;
+  });
+  [['lower', 'Any day, lower', 'peak'], ['higher', 'Any day, higher', 'valley']].forEach(([which, label, dir]) => {
+    rows.push(`<tr class="base"><td title="Every trading day, signal or not: how often the close was ${which} that many days later. The base rate to compare the ${dir} rows with.">${label}</td>` +
+      `<td class="num" title="Trading days with a MACD value, up to the selected day">${rec.days || '–'}</td>${HORIZONS.map(h => baseCells(rec.base[h], which, h)).join('')}</tr>`);
+  });
+  return `<table class="plain record">${head}<tbody>${rows.join('')}</tbody></table>`;
+}
+// Every signal in the record, newest first: the date (a button that moves the day picker there),
+// the badge, that day's close and the move over each horizon, "–" where the horizon runs past
+// the selected day.
+function recordListHTML(rec) {
+  const all = [];
+  rec.groups.forEach((g, gi) => g.signals.forEach(s => all.push({g, gi, s})));
+  if (!all.length) return '<div class="empty">No signals up to the selected day.</div>';
+  all.sort((a, b) => b.s.k - a.s.k || a.gi - b.gi);
+  const rows = all.map(({g, s}) => `<tr><td><button type="button" class="daylink" data-day="${esc(s.date)}" title="Show this day on the chart">${esc(s.date)}</button></td><td>${badge(g)}</td><td class="num">${fmtClose(s.close)}</td>` +
+    HORIZONS.map(h => isNum(s.moves[h]) ? `<td class="num">${fmtMove(s.moves[h])}</td>` : `<td class="num" title="Not known yet: ${h} trading days after this signal is past the selected day"><span class="sub">–</span></td>`).join('') + '</tr>');
+  return `<table class="plain record"><thead><tr><th>Date</th><th>Signal</th><th class="num">Close</th>${HORIZONS.map(h => `<th class="num">+${h} days</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`;
+}
+// The Track record section under the chart, for the chart's ticker and day (r = its row()).
+function renderRecord(r) {
+  const sec = $('record-sec');
+  if (!r) { sec.hidden = true; return; }
+  const rec = trackRecord(r.f, r.i);
+  $('record-sym').innerHTML = esc(r.sym) + staleBadge(r);  // a stale ticker's record stops at its own last bar; the badge says so
+  $('record-table').innerHTML = recordTableHTML(rec);
+  $('record-list').innerHTML = recordListHTML(rec);
+  sec.hidden = false;
+}
+// The holdings table's "Peak record (10d)": the confirmed-PEAK group's record over the next 10
+// trading days for one holding; null when it has no confirmed peak up to the selected day.
+function peakRecord(r) {
+  const rec = trackRecord(r.f, r.i);
+  const g = rec.groups.find(x => x.dir === 'PEAK' && x.stage === 3);
+  if (!g.signals.length) return null;
+  const t = g.hz[PEAK_RECORD_H];
+  return {hits: t.hits, outcomes: t.outcomes, count: g.signals.length, base: baseRate(rec.base, 'PEAK', PEAK_RECORD_H)};
+}
+function recordCell(r) { return r.rec ? rateCell(r.rec.hits, r.rec.outcomes, r.rec.base, PEAK_RECORD_H) : '<td class="num">–</td>'; }
+// Sorting that column: by hit rate, then by the number of confirmed peaks; nothing to sort on
+// (no confirmed peak, or no outcome yet) is null and goes last. Records under RECORD_MIN outcomes
+// (the muted ones) form a lower tier that stays below the full-sample ones whichever way the
+// column is sorted, so a "2 of 2" never tops the list.
+function recordSort(r) { return r.rec && r.rec.outcomes ? [r.rec.hits / r.rec.outcomes, r.rec.count] : null; }
+function recordTier(r) { return r.rec && r.rec.outcomes >= RECORD_MIN ? 0 : 1; }
+
 function rank(r) {  // peaks first, then valleys, then higher stage, then closeness to the high
   const p = topSignal(r.sigs, 'PEAK'), v = topSignal(r.sigs, 'VALLEY');
   if (p) return [0, -p.stage, r.pct];
@@ -650,10 +784,12 @@ function sortRows(rows, key, days) {
     macd: (r.hist >= 0 ? 0 : 2) + (r.trend === 'rising' ? 0 : 1), hist: r.hist, close: r.close,
     recent: recentCount(r, days), default: rank(r),
     // the holding-details columns; a missing value ("–") sorts last whichever way the column goes
-    value: p.value, weight: p.weight, gain: p.gainPct, target: p.toTarget, stop: p.toStop, held: p.heldDays, spy: p.vsSpy1m})[s.col]; };
+    value: p.value, weight: p.weight, gain: p.gainPct, target: p.toTarget, stop: p.toStop, held: p.heldDays, spy: p.vsSpy1m,
+    record: recordSort(r)})[s.col]; };
   rows.sort((a, b) => {
     const x = val(a), y = val(b);
     if ((x == null) !== (y == null)) return x == null ? 1 : -1;
+    if (s.col === 'record' && recordTier(a) !== recordTier(b)) return recordTier(a) - recordTier(b);  // small samples below full ones, either direction
     return (s.asc ? 1 : -1) * cmpVal(x, y) || a.sym.localeCompare(b.sym);
   });
   return rows;
@@ -712,7 +848,8 @@ function renderDash() {
   const hold = rows.filter(r => r.group === 'holdings'), watch = rows.filter(r => r.group !== 'holdings');
   $('rangenote').textContent = rangeLabel();
   // The viewer's holding details (shares, cost, ...) and what they add; weight needs the total first.
-  hold.forEach(r => { r.pos = position(r, day); });
+  // Each holding's confirmed-peak record, for the "Peak record (10d)" column.
+  hold.forEach(r => { r.pos = position(r, day); r.rec = peakRecord(r); });
   const total = hold.reduce((s, r) => s + (isNum(r.pos.value) ? r.pos.value : 0), 0);
   hold.forEach(r => { if (isNum(r.pos.value) && total > 0) r.pos.weight = r.pos.value / total * 100; });
   const anyShares = hold.some(r => isNum(r.pos.value));
@@ -749,7 +886,11 @@ function renderDash() {
     `<div class="chip"><b>${symlink(r.sym)}</b>${staleBadge(r)} <span>RSI ${isNum(r.rsi) ? r.rsi.toFixed(0) : '–'}, ${fmtPct(r.pct)} off high, histogram ${r.trend}</span></div>`).join('')}</div>`
     : '<div class="empty">None on this day.</div>';
   $('valleys').innerHTML = valleys.length ? `<div class="cards">${valleys.map(r => card(r, 'VALLEY')).join('')}</div>` : '<div class="empty">No new VALLEY signals on your holdings on this day.</div>';
-  $('holdings').innerHTML = hold.length ? tableHTML(sortRows(hold.slice(), 'holdings', days), 'holdings', days, holdCols(hold)) : '<div class="empty">No holdings with data. Add some on the My list tab.</div>';
+  // The Peak record column appears once some holding has a confirmed peak to report on; the
+  // holding-details columns follow it.
+  const recordCol = hold.some(r => r.rec) ? [['record', 'Peak record (10d)']] : [];
+  if (!recordCol.length && SORT.holdings.col === 'record') SORT.holdings = {col: 'off', asc: true};  // the sorted column went away: back to the default order
+  $('holdings').innerHTML = hold.length ? tableHTML(sortRows(hold.slice(), 'holdings', days), 'holdings', days, recordCol.concat(holdCols(hold))) : '<div class="empty">No holdings with data. Add some on the My list tab.</div>';
   const wrows = $('allwatch').checked ? watch.slice() : whits.slice();
   $('watch').innerHTML = wrows.length ? tableHTML(sortRows(wrows, 'watch', days), 'watch', days)
     : (watch.length ? '<div class="empty">No watchlist signals on this day.</div>' : '<div class="empty">No watch tickers with data.</div>');
@@ -795,37 +936,42 @@ async function openChart(sym) {
   S.chartSym = sym;
   const need = !S.files[sym] && known(sym);
   S.chartPending = need ? sym : null;  // a loaded ticker shows at once, even if another one is still being fetched
+  if (!need) { buildDays(); renderControls(); }  // a ticker off the lists: the day picker takes in its days
   showTab('chart'); window.scrollTo({top: 0});
   if (!need) return;
   await loadFiles([sym]);
   if (S.chartPending !== sym) return;  // the viewer opened something else meanwhile
   S.chartPending = null;
+  buildDays(); renderControls();
   if (S.tab === 'chart') renderChart();
 }
 function renderChart() {
   const box = $('chartbox');
+  // The Track record section follows the chart: renderRecord(null) hides it whenever no chart is
+  // drawn. (It is not hidden while a chart is being redrawn: that would collapse the page for an
+  // instant and lose the viewer's scroll position.)
   if (S.chartPending) {  // a Screener ticker whose file is still on its way
     $('chartsym').innerHTML = `<option>${esc(S.chartPending)}</option>`; $('chartmeta').textContent = '';
     box.innerHTML = `<div class="empty">Loading data for ${esc(S.chartPending)}…</div>`;
-    return;
+    renderRecord(null); return;
   }
   const syms = chartSyms();
   if (S.chartSym && !syms.includes(S.chartSym) && S.fileErrors[S.chartSym]) {  // a Screener ticker whose file failed
     $('chartsym').innerHTML = `<option>${esc(S.chartSym)}</option>`; $('chartmeta').textContent = '';
     box.innerHTML = `<div class="empty">Could not load the data file for ${esc(S.chartSym)} (${esc(S.fileErrors[S.chartSym])}). Try again in a minute.</div>`;
-    return;
+    renderRecord(null); return;
   }
   if (!syms.length) {
     $('chartsym').innerHTML = ''; $('chartmeta').textContent = '';
     box.innerHTML = `<div class="empty">${S.indexError ? esc(INDEX_ERROR) : 'No tickers with data yet. Add some on the My list tab.'}</div>`;
-    return;
+    renderRecord(null); return;
   }
   if (!S.chartSym || !syms.includes(S.chartSym)) S.chartSym = syms[0];
   $('chartsym').innerHTML = syms.map(s => `<option value="${esc(s)}"${s === S.chartSym ? ' selected' : ''}>${esc(s)}${chartLabel(s)}</option>`).join('');
   const f = S.files[S.chartSym];
   const day = S.day || f.dates[f.dates.length - 1];  // no lists yet (Screener only): the ticker's own newest day
   const r = row(S.chartSym, day);
-  if (!r) { box.innerHTML = `<div class="empty">No data for ${esc(S.chartSym)} on or before ${esc(day)}.</div>`; $('chartmeta').textContent = ''; return; }
+  if (!r) { box.innerHTML = `<div class="empty">No data for ${esc(S.chartSym)} on or before ${esc(day)}.</div>`; $('chartmeta').textContent = ''; renderRecord(null); return; }
   const end = r.i + 1, start = Math.max(0, end - S.rangeN);
   const D = f.dates.slice(start, end), C = f.close.slice(start, end), M = f.macd.slice(start, end),
     Sg = f.signal.slice(start, end), Hs = f.hist.slice(start, end), Rs = f.rsi.slice(start, end);
@@ -904,6 +1050,7 @@ function renderChart() {
   svg.addEventListener('pointermove', move);
   svg.addEventListener('pointerdown', move);
   svg.addEventListener('pointerleave', () => { cross.style.display = 'none'; tip.style.display = 'none'; });
+  renderRecord(r);  // same ticker and day as the chart; the range selector does not affect it
 }
 function macdLabel() { const p = S.index && S.index.params || {}; return `${p.fast || 12}/${p.slow || 26}/${p.signal || 9}`; }
 function rsiLabel() { const p = S.index && S.index.params || {}; return `(${p.rsi || 14})`; }
@@ -1172,7 +1319,8 @@ function showTab(t) {
   if (t === 'list') renderEditor();
   lsSet('macd-tab', t);
 }
-function setDay(d) { if (d && S.days.includes(d)) { S.day = d; render(); } }
+// Select a trading day; true when the day changed (false for an unknown day or the one already shown).
+function setDay(d) { if (!d || !S.days.includes(d) || d === S.day) return false; S.day = d; render(); return true; }
 
 ['rangesel', 'rangesel2'].forEach(id => { $(id).innerHTML = RANGES.map(([l, n]) => `<button data-n="${n}">${l}</button>`).join(''); });
 document.addEventListener('click', e => {
@@ -1186,12 +1334,24 @@ document.addEventListener('click', e => {
   if (sl) { openChart(sl.dataset.sym); return; }
   const aw = e.target.closest('.addwatch');
   if (aw) { addToWatch(aw.dataset.sym); return; }
+  // A date in the Track record's signal list: show that day on the chart (and the day picker). The
+  // list is rebuilt by the render, so keyboard focus goes back to the same date's button (focus()
+  // keeps it in view if the list shifted); a mouse click also scrolls up to the chart, a keyboard
+  // activation (e.detail is 0) stays with the list.
+  const dl = e.target.closest('.daylink');
+  if (dl) {
+    const d = dl.dataset.day, changed = setDay(d);
+    const again = [...document.querySelectorAll('#record-list .daylink')].find(b => b.dataset.day === d);
+    if (again) again.focus();
+    if (changed && e.detail !== 0) window.scrollTo({top: 0});
+    return;
+  }
   const cell = e.target.closest('th');
   const th = cell && cell.querySelector('.sorth');  // the sort button; a click anywhere in the cell counts
   if (th) {
     const s = SORT[th.dataset.key];
     // Numeric "more is more interesting" columns start descending, the rest ascending.
-    if (s.col === th.dataset.col) s.asc = !s.asc; else { s.col = th.dataset.col; s.asc = !['rsi', 'close', 'recent', 'signal', 'chg1', 'chg3', 'value', 'weight', 'gain', 'held', 'spy'].includes(th.dataset.col); }
+    if (s.col === th.dataset.col) s.asc = !s.asc; else { s.col = th.dataset.col; s.asc = !['rsi', 'close', 'recent', 'signal', 'chg1', 'chg3', 'value', 'weight', 'gain', 'held', 'spy', 'record'].includes(th.dataset.col); }
     render();
   }
 });

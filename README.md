@@ -29,6 +29,19 @@ put in the page address, so the **Copy link** button never carries them. The **B
 the table is for moving them to another device: **Copy backup** copies them as a block of text,
 and **Restore from backup** reads that text back in on the other device.
 
+**Track record.** On the **Charts** tab, under the chart, a section headed
+`Track record for <TICKER>` shows what the close did 5, 10 and 20 trading days after each signal
+the ticker fired in the past year, up to the day you picked. For each stage it gives a
+**Hit rate** (how often the close was lower after a PEAK signal, or higher after a VALLEY signal,
+as "4 of 6") and a **Median move**, next to what the close did on an ordinary day over the same
+period: the **Any day, lower** and **Any day, higher** rows, the base rate. A hit rate close to
+the base rate means the signal added nothing on that ticker over the past year.
+**Show each signal** opens a list of every signal with its date, the close that day and the
+moves that followed; clicking a date moves the chart to it. On the Dashboard, the holdings table
+gains a **Peak record (10d)** column: the ten-day hit rate of the holding's confirmed PEAK
+signals. Fewer than about 10 signals is too few to judge, and a year of daily data rarely has
+more. All of this describes the past; none of it is a prediction.
+
 **This site is not financial advice.** It describes what an indicator is doing. It does not tell
 anyone what to buy or sell.
 
@@ -89,6 +102,7 @@ Details worth knowing:
 | `docs/SPEC.md` | The technical description the files were built to. |
 | `docs/SCREENER.md` | The same for the Screener tab and `screener.json`. |
 | `docs/HOLDINGS.md` | The same for the Holding details table and the portfolio columns it adds to the Dashboard. |
+| `docs/TRACKRECORD.md` | The same for the Track record section on the Charts tab and the Peak record column. |
 
 A "repository" is GitHub's word for one project's folder. A "commit" is a saved change with a
 short note attached. A "workflow" is a job GitHub runs for you.
@@ -158,6 +172,10 @@ Anyone can open the site address. Nobody needs a GitHub account to view it.
   chart even if it is not on your list.
 - **Charts** shows one ticker at a time: price, MACD and RSI over the range you choose, from 5
   days to 1 year. Move the mouse over the chart to read the numbers for any day.
+- **Track record** (on the **Charts** tab, under the chart) shows what the close did 5, 10 and
+  20 trading days after each of the ticker's past signals, next to what it did on an ordinary
+  day, with a **Show each signal** list; on the Dashboard the holdings table gains a
+  **Peak record (10d)** column for confirmed PEAK signals. Both describe the past only.
 - **Info** explains every term on the page in plain language. Start there if MACD and RSI are new
   to you.
 - **Holding details** (on the **My list** tab) adds your own numbers to the Dashboard. With

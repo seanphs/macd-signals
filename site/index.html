@@ -149,6 +149,16 @@
   </div>
   <div class="chartbox" id="chartbox"></div>
 </section>
+<section id="record-sec" hidden>
+  <h2><span>Track record for <span id="record-sym"></span></span> <span class="note">what the close did 5, 10 and 20 trading days after each signal in the past year, up to the selected day, next to what it did on an ordinary day. A description of the past, not a prediction.</span></h2>
+  <div class="scroll" id="record-table"></div>
+  <p class="sub record-note">Fewer than about 10 signals is too few to judge; a year of daily data rarely has more. Muted numbers rest on fewer than 5 outcomes. The "Any day" rows are the base rate: how often the close was lower or higher that many trading days after any day at all, signal or not. Hover a hit rate for the percent and the base rate.</p>
+  <details id="record-details">
+    <summary>Show each signal</summary>
+    <p class="sub">Newest first. A dash means that many trading days after the signal is past the selected day. Click a date to show it on the chart.</p>
+    <div class="scroll" id="record-list"></div>
+  </details>
+</section>
 </div>
 
 <div id="view-info" hidden>
@@ -212,6 +222,11 @@
 <dt>Trailing stop</dt><dd>A percentage you chose. The stop price is the highest close since your purchase date (or over the past year of data when no date is entered, or the date is before the data starts) minus that percentage; it moves up with new highs and never down. The page shows how far the close is above it, or BELOW when the close is under it. It only measures; it does not place orders or suggest a percentage.</dd>
 <dt>Held / long-term</dt><dd>How long you have held the shares, from your purchase date to the selected day. "Long-term" marks a holding kept more than one year (a year and a day or more). Tax rules depend on your own situation and country; the page does not give tax advice.</dd>
 <dt>vs SPY (1M)</dt><dd>This ticker's change over the last 21 trading days minus SPY's change over the same days, in percentage points. SPY is a fund that tracks the S&amp;P 500, so this is "did it do better or worse than the broad U.S. market this month". It shows a dash when SPY's data is not available.</dd>
+<dt>Track record</dt><dd>On the Charts tab, under the chart: for the ticker shown, what the close did 5, 10 and 20 trading days after each signal in the year of history on this page, up to the selected day. Each kind of signal (peak or valley, each stage) gets a hit rate and a median move, next to the base rate: what the close did after any trading day, signal or not. The samples are small: a year rarely holds more than about ten signals of one kind, so most of these numbers rest on a handful of cases, and the page mutes any that rest on fewer than five. "Show each signal" lists every signal with its date and moves. It describes what happened on this one ticker in the past; it says nothing about what the next signal will do.</dd>
+<dt>Hit rate</dt><dd>The share of past signals that were followed by a close in the direction the signal names: for a peak, a lower close 5, 10 or 20 trading days later; for a valley, a higher close. An unchanged close is a miss either way. Shown as "4 of 6": 4 hits out of the 6 signals old enough to have an outcome; hover for the percent and the base rate. A signal whose horizon runs past the selected day has no outcome yet and is left out of the count.</dd>
+<dt>Base rate</dt><dd>How often the close was lower (or higher) that many trading days after any day at all, signal or not, over the same history. It is what gives a hit rate its meaning: a peak hit rate of 55% next to an "Any day, lower" rate of 52% means the signal added almost nothing on that ticker; a hit rate well above the base rate means it did better than an ordinary day did.</dd>
+<dt>Median move</dt><dd>The middle value of the percent change in the close over the horizon, across the signals in the group: half the moves were larger, half smaller. Signed, so -2.3% means the typical close was 2.3% lower. A median is less swayed by one extreme case than an average would be.</dd>
+<dt>Peak record (10d)</dt><dd>A column of the All holdings table: the hit rate of that holding's confirmed PEAK signals over the next 10 trading days, up to the selected day, as "4 of 6" with the percent and the base rate in the hover text. A dash means no confirmed peak so far in its history, or none old enough to have a 10-day outcome yet (the hover text says which); muted numbers rest on fewer than five outcomes. The full record, for every kind of signal and every horizon, is on the Charts tab.</dd>
 </dl>
 
 <h2>Reading the charts</h2>
@@ -219,7 +234,7 @@
 <div class="ex">A typical peak sequence on the chart: the green histogram bars get shorter (early warning), the blue MACD line flattens and tips over (MACD turned), then the blue line drops through the orange line and the bars turn red (CONFIRMED).</div>
 
 <h2>Things to keep in mind</h2>
-<p>MACD is built from averages, so it lags. By the time a crossover is confirmed, part of the move has already happened. It also gives plenty of false alarms in sideways markets. Treat these signals as a prompt to look, not as a verdict. A valley signal on a stock in a long decline is common on the way down; the "% below 1-yr high" column shows how far it has fallen, not whether it has stopped. The distance to a sell target or a trailing stop is arithmetic on a number you typed in, not a forecast of where the price is going. Prices come from Yahoo Finance and can occasionally be late or missing; the footer shows how many tickers failed or were kept from the previous night. Nothing here is financial advice.</p>
+<p>MACD is built from averages, so it lags. By the time a crossover is confirmed, part of the move has already happened. It also gives plenty of false alarms in sideways markets. Treat these signals as a prompt to look, not as a verdict. A valley signal on a stock in a long decline is common on the way down; the "% below 1-yr high" column shows how far it has fallen, not whether it has stopped. The distance to a sell target or a trailing stop is arithmetic on a number you typed in, not a forecast of where the price is going. A track-record hit rate close to the base rate means the signal added nothing on that ticker over the past year, and even one well above it is a handful of cases from a single year. Prices come from Yahoo Finance and can occasionally be late or missing; the footer shows how many tickers failed or were kept from the previous night. Nothing here is financial advice.</p>
 
 <h2>About this site</h2>
 <p>The prices come from Yahoo Finance and are downloaded once a night by a free, automated GitHub job; everything is computed as of the last completed trading day. <span id="params-note"></span></p>

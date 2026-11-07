@@ -32,6 +32,7 @@ SETUP.md                       step-by-step: account, repo, upload, Pages source
 docs/SPEC.md                   this file
 docs/SCREENER.md               addendum: the Screener tab and screener.json (2026-11-06)
 docs/HOLDINGS.md               addendum: Holding details on My list and the Dashboard (2026-11-06)
+docs/TRACKRECORD.md            addendum: Track record (Charts tab) and the Peak record (10d) column (2026-11-07)
 ```
 
 Paths in the page are relative (`data/index.json`), because GitHub Pages serves a project site
@@ -244,8 +245,11 @@ Sections, in this order, all for the selected day:
 4. "Holdings: VALLEY signals" cards (blue family).
 5. "All holdings" table, sortable by clicking headers (default: closeness to high): Ticker, Name,
    Signal (badges or "-"), MACD vs signal (above/below, histogram rising/falling), Histogram
-   sparkline over the range, Close, RSI, % below 1-yr high, Recent (strip over the range: a
-   coloured mark on each day the ticker fired; hover shows which). Choppy rows marked.
+   sparkline over the range, Close, RSI, % below 1-yr high, `Peak record (10d)` (the
+   confirmed-PEAK group's 10-day hit rate as "4 of 6", sortable, muted under 5 outcomes, "–"
+   with no confirmed peaks; it sits before the Holding details columns when those are shown;
+   see `docs/TRACKRECORD.md`), Recent (strip over the range: a coloured mark on each day the
+   ticker fired; hover shows which). Choppy rows marked.
 6. "Watchlist" table: watch tickers that fired on the selected day, peaks first; a short empty
    message otherwise.
 7. "Signal timeline": grid of every listed ticker that fired within the range x the days in the
@@ -283,6 +287,14 @@ blue, signal line orange, histogram bars green/red, dotted zero line, markers on
 days a signal fired, coloured by stage), RSI (line with dotted 30 / 70 guides). Hover shows a
 crosshair with date, close, MACD, signal, histogram, RSI. Clicking a ticker anywhere on the
 Dashboard tab opens it here.
+
+- Under the chart box, a "Track record for <TICKER>" section: a table of what the close did 5,
+  10 and 20 trading days after each past signal, one row per stage group with "Hit rate" (as
+  "4 of 6") and "Median move" per horizon, the "Any day, lower" and "Any day, higher" base-rate
+  rows at the bottom, and a "Show each signal" `<details>` list of every signal (a date click
+  sets the day picker). Re-rendered with the chart (ticker, day; the range selector does not
+  apply); hidden when no ticker is loaded. Definitions, wording and the verification expected
+  are in `docs/TRACKRECORD.md`.
 
 ### Info tab
 
@@ -340,7 +352,7 @@ It is not financial advice."
 Written for a non-developer who owns the repo. README: what the site is, how the nightly job
 works, how to add tickers (edit `universe.txt` in the GitHub web editor, commit, optionally run
 the workflow by hand; the ticker goes under `## Added by the owner`), how to share the site, how
-to read the page (short, including a Screener paragraph and a Holding details paragraph; the Info tab has the rest), troubleshooting (Actions tab shows red: open the run, read the summary line; Yahoo
+to read the page (short, including a Screener paragraph, a Holding details paragraph and a Track record paragraph; the Info tab has the rest), troubleshooting (Actions tab shows red: open the run, read the summary line; Yahoo
 blocked; schedule disabled after inactivity; page shows old data: hard refresh), privacy (lists
 stay in viewers' browsers; the share link contains the list; the repo is public but contains no
 personal data), not financial advice. SETUP: numbered steps with the exact labels of GitHub's
