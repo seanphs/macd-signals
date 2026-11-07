@@ -1,11 +1,15 @@
 """Nightly price fetch for the MACD Signals web page.
 
-Reads universe.txt (one ticker per line), pulls about a year of daily closes for every
-ticker from Yahoo Finance, computes MACD (12/26/9), RSI (14) and the three-stage
-peak/valley signals for every day of that history, and writes one JSON file per ticker
-plus index.json and screener.json into site/data/. The web page reads those files; nothing
-else is needed. screener.json is a one-line-per-ticker summary of the latest trading day
-(the Screener tab shows it); its exact contents are described in docs/SCREENER.md.
+Reads universe.txt (one ticker per line), pulls two years of daily prices for every ticker
+from Yahoo Finance and publishes the latest year of them: MACD (12/26/9), RSI (14) and the
+three-stage peak/valley signals for every day of that year, computed on that year alone
+exactly as a one-year download would give them. The year before it is only there for three
+descriptive numbers that need a longer look back: the 200-day average of the close, the
+past-year return skipping the latest month, and the day's volume against its 50-day average
+(docs/COMBOS.md). It writes one JSON file per ticker plus index.json and screener.json into
+site/data/. The web page reads those files; nothing else is needed. screener.json is a
+one-line-per-ticker summary of the latest trading day (the Screener tab shows it); its exact
+contents are described in docs/SCREENER.md and docs/COMBOS.md.
 
 The math is copied unchanged from macd_scan.py, the daily scanner this page grew out of:
 same EMA seeding (simple average of the first n values), same MACD and RSI definitions,
@@ -35,14 +39,16 @@ a few tickers by hand; a run with --only always exits 0 and simply reports its c
 Standard library only (Python 3.9+). The only network traffic is to Yahoo Finance.
 
 Usage:  python -I fetch_data.py [--universe universe.txt] [--out site/data] [--only T1,T2,...]
-                                [--limit N] [--sleep 0.25] [--range 1y]
+                                [--limit N] [--sleep 0.25] [--range 2y]
 """
 import argparse
 import collections
 import datetime as dt
 import json
+import math
 import os
 import re
+import statistics
 import sys
 import time
 import urllib.error
@@ -75,6 +81,16 @@ HURRY_TIMEOUT = 10
 TIME_BUDGET = 40 * 60
 MIN_BARS = SLOW + SIG + 5   # same minimum history as macd_scan.py (40 completed days)
 PROGRESS_EVERY = 50
+# The descriptive conditions of docs/COMBOS.md. They need more than a year of bars, which is
+# why the default download is two years while the page still shows one.
+MA_BARS = 200               # "200-day average": mean close over the last 200 bars
+MOM_BARS, MOM_SKIP = 252, 21   # past-year return (252 bars back) skipping the latest month (21 bars)
+VOL_BARS = 50               # volume is compared with its mean over the 50 bars before
+LATELY = 10                 # "lately" = on at least one of the last 10 trading days
+RSI_LO, RSI_HI = 30, 70     # RSI under 30 / over 70
+HEAVY_X = 2                 # heavy volume = at least twice the 50-day mean
+MEDIAN_GROUP = "S&P 500"    # the group whose median past-year return splits strong from weak
+MEDIAN_MIN = 100            # a day gets a median only when at least this many tickers have a value
 
 
 class YahooBlocked(ValueError):
@@ -172,29 +188,55 @@ QUOTE_FILLS = []   # bars whose close was taken from the closing quote (see comp
 
 
 def completed_bars(res):
-    """Return (dates, closes) of completed daily bars, selected exactly as macd_scan.py does."""
+    """Return (dates, closes, adjcloses, volumes) of completed daily bars, selected exactly as
+    macd_scan.py does. The last two are Yahoo's dividend-adjusted close and the day's volume
+    for the same bars, None where Yahoo sent none (the quote-filled last bar below usually
+    has neither)."""
     if not res.get("timestamp"):
         raise ValueError("Yahoo returned no price bars")
     ts = res["timestamp"]
     closes = res["indicators"]["quote"][0]["close"]
+
+    def aligned(values):
+        # one value per timestamp, None where the series is missing or shorter
+        values = values if isinstance(values, list) else []
+        return [values[k] if k < len(values) else None for k in range(len(ts))]
+
+    adjs = aligned(((res["indicators"].get("adjclose") or [{}])[0] or {}).get("adjclose"))
+    vols = aligned(res["indicators"]["quote"][0].get("volume"))
     meta = res["meta"]
     # Drop today's bar while the session is still open; it is a partial candle.
     reg = meta.get("currentTradingPeriod", {}).get("regular", {})
     if reg and ts[-1] >= reg["start"] and time.time() < reg["end"]:
-        ts, closes = ts[:-1], closes[:-1]
+        ts, closes, adjs, vols = ts[:-1], closes[:-1], adjs[:-1], vols[:-1]
     # Yahoo's evening quirk: for an hour or two after the close, today's bar comes back with a
     # null close while the meta still carries the closing quote (regularMarketPrice, stamped at
     # the close). Take that quote so the nightly job is not a day behind. By the morning, when
-    # macd_scan.py runs, the bar is settled and this never applies.
+    # macd_scan.py runs, the bar is settled and this never applies. The bar keeps whatever
+    # adjusted close and volume Yahoo sent for it.
     quote, quote_time = meta.get("regularMarketPrice"), meta.get("regularMarketTime", 0)
     if (reg and closes and closes[-1] is None and ts[-1] >= reg["start"] and time.time() >= reg["end"]
             and reg["start"] <= quote_time and isinstance(quote, (int, float))):
         closes = closes[:-1] + [float(quote)]
         QUOTE_FILLS.append(ts[-1])
     offset = meta.get("gmtoffset", 0)
-    pairs = [(t, c) for t, c in zip(ts, closes) if c is not None]
-    dates = [dt.datetime.fromtimestamp(t + offset, dt.timezone.utc).date() for t, _ in pairs]
-    return dates, [c for _, c in pairs]
+    bars = [(t, c, a, v) for t, c, a, v in zip(ts, closes, adjs, vols) if c is not None]
+    dates = [dt.datetime.fromtimestamp(t + offset, dt.timezone.utc).date() for t, _, _, _ in bars]
+    return dates, [c for _, c, _, _ in bars], [a for _, _, a, _ in bars], [v for _, _, _, v in bars]
+
+
+def published_start(dates):
+    """Index of the first bar of the published year: the bars dated later than the same
+    calendar day one year before the last bar (29 Feb counts as 28 Feb). That is the window a
+    one-year download from Yahoo returns, so everything computed on it is unchanged."""
+    if not dates:
+        return 0
+    last = dates[-1]
+    try:
+        cutoff = last.replace(year=last.year - 1)
+    except ValueError:  # 29 February
+        cutoff = last.replace(year=last.year - 1, day=28)
+    return next((k for k, d in enumerate(dates) if d > cutoff), len(dates))
 
 
 # ---------------------------------------------------------------- the math (verbatim from macd_scan.py)
@@ -280,9 +322,54 @@ def events_by_day(dates, line, hist):
     return out
 
 
+# ---------------------------------------------------------------- descriptive conditions (docs/COMBOS.md)
+# These describe where a stock stands; they are not part of the signals. Each is computed over
+# the whole download (two years) and then cut to the published year, so the first days of the
+# year have values too.
+
+def is_num(v):
+    """True for a real, finite number (not None, not a bool, not NaN)."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def sma_series(closes, n=MA_BARS):
+    """The mean close over the n bars ending at each bar; None until n bars exist."""
+    return [None if k < n - 1 else sum(closes[k - n + 1:k + 1]) / n for k in range(len(closes))]
+
+
+def momentum_series(adj, bars=MOM_BARS, skip=MOM_SKIP):
+    """Past-year return skipping the latest month, in percent: adj[k-21] / adj[k-252] - 1.
+    None when the history is too short or either adjusted close is missing or not positive."""
+    out = [None] * len(adj)
+    for k in range(bars, len(adj)):
+        recent, past = adj[k - skip], adj[k - bars]
+        if is_num(recent) and is_num(past) and recent > 0 and past > 0:
+            out[k] = (recent / past - 1) * 100
+    return out
+
+
+def volume_ratio_series(volumes, n=VOL_BARS):
+    """Each day's volume divided by the mean volume of the n bars before it (a missing volume
+    counts as 0 in the mean). None when fewer than n bars come before, the mean is 0, or the
+    day's own volume is missing."""
+    out = [None] * len(volumes)
+    for k in range(n, len(volumes)):
+        mean = sum(v if is_num(v) else 0 for v in volumes[k - n:k]) / n
+        if mean > 0 and is_num(volumes[k]):
+            out[k] = volumes[k] / mean
+    return out
+
+
 def build_record(sym, res, fetched_at):
-    """Turn one Yahoo result into the dictionary that becomes site/data/<SYM>.json."""
-    dates, closes = completed_bars(res)
+    """Turn one Yahoo result into the dictionary that becomes site/data/<SYM>.json.
+
+    The download covers two years; the file covers the latest one (published_start). The
+    signal numbers are computed on that year alone, exactly as from a one-year download; the
+    three condition series use the whole download and are then cut to the same year.
+    """
+    all_dates, all_closes, all_adj, all_vols = completed_bars(res)
+    start = published_start(all_dates)
+    dates, closes = all_dates[start:], all_closes[start:]
     if len(closes) < MIN_BARS:
         raise ValueError(f"only {len(closes)} daily bars (need {MIN_BARS})")
     meta = res["meta"]
@@ -291,6 +378,10 @@ def build_record(sym, res, fetched_at):
 
     def rounded(values, places):
         return [None if v is None else round(v, places) for v in values]
+
+    def rounded_cond(values, places):
+        # the condition series; "+ 0.0" turns a rounded -0.0 into 0.0
+        return [None if v is None else round(v, places) + 0.0 for v in values]
 
     return {
         "symbol": sym,
@@ -306,6 +397,9 @@ def build_record(sym, res, fetched_at):
         "hist": rounded(pad + hist, 4),
         "rsi": rounded(rsi_series(closes, RSI_N), 2),
         "events": events_by_day(dates, line, hist),
+        "sma200": rounded_cond(sma_series(all_closes)[start:], 4),
+        "mom": rounded_cond(momentum_series(all_adj)[start:], 2),
+        "volx": rounded_cond(volume_ratio_series(all_vols)[start:], 2),
     }
 
 
@@ -382,12 +476,82 @@ def pairs(events):
     return [[e["dir"], e["stage"]] for e in events]
 
 
-def screener_entry(record, group=DEFAULT_GROUP, stale=False, weak_pct=WEAK_PCT):
+def conditions_at(record, i, mom_median=None):
+    """Where the ticker stands at bar i, with the same rules as the page (docs/COMBOS.md).
+
+    Uses the file's own (rounded) arrays. A file written before the condition series existed
+    has no sma200 / mom / volx; such an array counts as all missing, and a condition whose
+    inputs are missing is None ("unknown"), never True or False.
+    """
+    dates = record["dates"]
+
+    def series(key):
+        values = record.get(key)
+        return values if isinstance(values, list) and len(values) == len(dates) else [None] * len(dates)
+
+    close, rsi_vals = series("close"), series("rsi")
+    sma, mom, volx = series("sma200"), series("mom"), series("volx")
+
+    def lately(values, test):
+        # True when the test holds on at least one of the last LATELY bars; None when any of
+        # those bars has no value (or there are not that many bars yet)
+        if i < LATELY - 1:
+            return None
+        window = values[i - LATELY + 1:i + 1]
+        if not all(is_num(v) for v in window):
+            return None
+        return any(test(v) for v in window)
+
+    above = close[i] > sma[i] if is_num(sma[i]) and is_num(close[i]) else None
+    median = (mom_median or {}).get(dates[i])
+    year = None
+    if is_num(mom[i]) and is_num(median):
+        year = "strong" if mom[i] > median else "weak" if mom[i] < median else "mid"
+    return {
+        "above200": above,
+        "rsi_lo": lately(rsi_vals, lambda v: v < RSI_LO),
+        "rsi_hi": lately(rsi_vals, lambda v: v > RSI_HI),
+        "heavy": lately(volx, lambda v: v >= HEAVY_X),
+        "year": year,
+        "mom": mom[i] if is_num(mom[i]) else None,
+        "volx": volx[i] if is_num(volx[i]) else None,
+    }
+
+
+def build_mom_median(out, tickers, groups):
+    """{date: median past-year return} over the MEDIAN_GROUP (S&P 500) tickers, for index.json.
+
+    Reads the files in `out` for every ticker of that group in `tickers` (fresh or stale) and
+    takes, per date, the median of the `mom` values as written there (2 decimals). Only dates
+    with at least MEDIAN_MIN values get a key. A file that cannot be read is simply not
+    counted (the screener's log line names it).
+    """
+    by_day = collections.defaultdict(list)
+    for sym in tickers:
+        if groups.get(sym) != MEDIAN_GROUP:
+            continue
+        try:
+            record = json.loads((Path(out) / f"{sym}.json").read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        dates, mom = record.get("dates"), record.get("mom")
+        if not isinstance(dates, list) or not isinstance(mom, list) or len(mom) != len(dates):
+            continue
+        for day, value in zip(dates, mom):
+            if is_num(value):
+                by_day[day].append(value)
+    return {day: round(statistics.median(values), 2) + 0.0
+            for day, values in sorted(by_day.items()) if len(values) >= MEDIAN_MIN}
+
+
+def screener_entry(record, group=DEFAULT_GROUP, stale=False, weak_pct=WEAK_PCT, mom_median=None):
     """The Screener's summary of one ticker file, as of the file's last bar (see SCREENER.md).
 
     `record` is the parsed <SYM>.json. Returns None when the last bar has no MACD value yet
     (a ticker still in its warm-up), so the caller leaves the ticker out. All numbers come
     from the file's already-rounded arrays; only the few derived ones are rounded here.
+    `mom_median` is index.json's map of the S&P 500 median past-year return per date, for
+    the "strong / weak past year" condition (docs/COMBOS.md).
     """
     dates, closes = record["dates"], record["close"]
     macd_line, sig, hist, rsi_vals = record["macd"], record["signal"], record["hist"], record["rsi"]
@@ -437,23 +601,26 @@ def screener_entry(record, group=DEFAULT_GROUP, stale=False, weak_pct=WEAK_PCT):
         "today": pairs(events.get(last_bar, [])),
         "recent": recent,
         "cross": cross,
+        "cond": conditions_at(record, len(dates) - 1, mom_median),
     }
 
 
-def build_screener(out, tickers, groups, params, generated, last_bar):
+def build_screener(out, tickers, groups, params, generated, last_bar, mom_median=None):
     """Build the screener.json object from the ticker files in `out`.
 
     `tickers` is index.json's tickers map (fresh and stale alike), `groups` is
-    read_universe_groups()' {ticker: group}. Returns (screener, left_out): the object to
-    write and how many tickers were skipped because their file could not be read or has
-    no MACD value on its last bar. One bad file never stops the others.
+    read_universe_groups()' {ticker: group}, `mom_median` is build_mom_median()'s map (empty
+    when it could not be computed: then no ticker's past year is "strong" or "weak").
+    Returns (screener, left_out): the object to write and how many tickers were skipped
+    because their file could not be read or has no MACD value on its last bar. One bad file
+    never stops the others.
     """
     entries, left_out = {}, 0
     for sym, info in tickers.items():
         try:
             record = json.loads((Path(out) / f"{sym}.json").read_text(encoding="utf-8"))
             entry = screener_entry(record, groups.get(sym, DEFAULT_GROUP),
-                                   info.get("stale", False), params["weak_pct"])
+                                   info.get("stale", False), params["weak_pct"], mom_median or {})
         except Exception as e:
             entry = None
             print(f"  {sym}: left out of the screener ({describe(e)})", flush=True)
@@ -488,7 +655,10 @@ def main(argv=None):
     ap.add_argument("--only", help="comma-separated tickers to fetch instead of the universe (testing)")
     ap.add_argument("--limit", type=int, help="fetch only the first N tickers (testing)")
     ap.add_argument("--sleep", type=float, default=0.25, help="seconds to pause between tickers")
-    ap.add_argument("--range", default="1y", help="how much history to ask Yahoo for (default 1y)")
+    ap.add_argument("--range", default="2y",
+                    help="how much history to ask Yahoo for (default 2y: the files cover the latest "
+                         "year, but the 200-day average and the past-year return need more than a "
+                         "year of bars; with 1y those two are mostly empty)")
     args = ap.parse_args(argv)
     started = time.time()
 
@@ -571,11 +741,23 @@ def main(argv=None):
     generated = now_utc()
     params = {"fast": FAST, "slow": SLOW, "signal": SIG, "rsi": RSI_N, "weak_pct": WEAK_PCT}
 
+    def universe_groups():
+        return read_universe_groups(args.universe) if Path(args.universe).is_file() else {}
+
+    # mom_median: per date, the S&P 500 median of the past-year return, for the "strong / weak
+    # past year" condition. Like screener.json it is extra, so a failure is logged and skipped.
+    try:
+        mom_median = build_mom_median(out, tickers, universe_groups())
+        print(f"mom_median: {len(mom_median)} trading days", flush=True)
+    except Exception as e:
+        mom_median = {}
+        print(f"mom_median was not computed: {describe(e)}", flush=True)
+
     # screener.json: the latest day for every ticker that has a file. If anything about it
     # goes wrong the run carries on, because index.json and the summary line matter more.
     try:
-        groups = read_universe_groups(args.universe) if Path(args.universe).is_file() else {}
-        screener, left_out = build_screener(out, tickers, groups, params, generated, last_bar)
+        groups = universe_groups()
+        screener, left_out = build_screener(out, tickers, groups, params, generated, last_bar, mom_median)
         write_json(out / "screener.json", screener)
         print(f"screener: {len(screener['tickers'])} tickers, {left_out} left out", flush=True)
     except Exception as e:
@@ -588,6 +770,7 @@ def main(argv=None):
         "params": params,
         "tickers": tickers,
         "failed": failed,
+        "mom_median": mom_median,
     })
     print(f"fetched {fetched}  stale {stale}  failed {len(failed)}  last_bar {last_bar}"
           f"  elapsed {time.time() - started:.0f}s", flush=True)

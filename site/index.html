@@ -17,6 +17,8 @@
   </div>
   <div class="controls">
     <span class="seg" id="rangesel" title="How much history the sparklines, recent-signal strips, timeline and charts show"></span>
+    <label class="hlsel" id="hl-wrap">Highlight
+      <select id="combosel" title="Mark the tickers on your list that match a combination of a confirmed signal and a condition. A description of today, not a prediction."></select></label>
     <div class="daynav">
       <button id="prev" title="Previous trading day">&#8592;</button>
       <select id="daysel" title="Trading day to show"></select>
@@ -46,6 +48,7 @@
 <div id="dash-body" hidden>
 <div class="stats" id="stats"></div>
 <div class="stats" id="pstats" hidden></div>
+<div class="hlline" id="hl-line" hidden></div>
 
 <section>
   <h2>Holdings: PEAK signals <span class="note">new on the selected day, strongest stage first</span></h2>
@@ -124,9 +127,30 @@
         <option value="30">30%</option>
       </select></label>
     <label>Group <select id="sc-group" title="Which part of the site's ticker list"><option value="all">All groups</option></select></label>
+    <label>200-day average
+      <select id="sc-ma" title="Whether the ticker closed above or below its 200-day average">
+        <option value="any">any</option>
+        <option value="above">above</option>
+        <option value="below">below</option>
+      </select></label>
+    <label>RSI lately
+      <select id="sc-rsil" title="RSI under 30 or over 70 on at least one of the last 10 trading days">
+        <option value="any">any</option>
+        <option value="lo">under 30</option>
+        <option value="hi">over 70</option>
+      </select></label>
+    <label title="Volume at least twice its 50-day average on at least one of the last 10 trading days"><input type="checkbox" id="sc-heavy"> Heavy volume lately</label>
+    <label>Past year
+      <select id="sc-year" title="Return over the past year, skipping the latest month, in the top or bottom half of S&amp;P 500 stocks">
+        <option value="any">any</option>
+        <option value="strong">strong half</option>
+        <option value="weak">weak half</option>
+      </select></label>
+    <label>Combination <select id="sc-combo" title="Set the filters to one of the combinations the site's ten-year test checked; none of them did better than an ordinary day"></select></label>
     <label><input type="checkbox" id="sc-choppy" checked> Hide choppy</label>
     <label><input type="checkbox" id="sc-mine"> Only tickers not on my list</label>
   </div>
+  <p class="sub" id="sc-combo-note" hidden></p>
   <div class="status" id="screen-status" hidden></div>
   <div class="sub" id="screen-count"></div>
   <div class="scroll" id="screen-body"></div>
@@ -141,7 +165,7 @@
 
 <div id="view-chart" hidden>
 <section>
-  <h2>Price, MACD and RSI <span class="note">one ticker at a time; hover for values. Markers on the MACD line are the days a signal fired.</span></h2>
+  <h2>Price, MACD and RSI <span class="note">one ticker at a time; hover for values. Markers on the MACD line are the days a signal fired. The thin dashed line on the price panel is the 200-day average.</span></h2>
   <div class="chart-head" style="margin-bottom:10px">
     <label class="note">Ticker <select id="chartsym"></select></label>
     <span class="seg" id="rangesel2"></span>
@@ -164,7 +188,7 @@
 <div id="view-info" hidden>
 <div class="info">
 <div class="box">
-<p><b>What this page is.</b> Once a night, a free automated job downloads a year of daily closing prices for about 800 stocks and funds, runs a momentum indicator called MACD over them, and notes the days when momentum looked like it was topping out (a <b>PEAK</b>) or bottoming out (a <b>VALLEY</b>). This page shows those results for the tickers on your own list, for most trading days of the past year. It describes what the indicators are doing. It does not tell you what to buy or sell, and no indicator can predict prices.</p>
+<p><b>What this page is.</b> Once a night, a free automated job downloads two years of daily prices for about 800 stocks and funds, runs a momentum indicator called MACD over the latest year of them, and notes the days when momentum looked like it was topping out (a <b>PEAK</b>) or bottoming out (a <b>VALLEY</b>). This page shows those results for the tickers on your own list, for most trading days of the past year. It describes what the indicators are doing. It does not tell you what to buy or sell, and no indicator can predict prices.</p>
 </div>
 
 <h2>The basics</h2>
@@ -227,14 +251,17 @@
 <dt>Base rate</dt><dd>How often the close was lower (or higher) that many trading days after any day at all, signal or not, over the same history. It is what gives a hit rate its meaning: a peak hit rate of 55% next to an "Any day, lower" rate of 52% means the signal added almost nothing on that ticker; a hit rate well above the base rate means it did better than an ordinary day did.</dd>
 <dt>Median move</dt><dd>The middle value of the percent change in the close over the horizon, across the signals in the group: half the moves were larger, half smaller. Signed, so -2.3% means the typical close was 2.3% lower. A median is less swayed by one extreme case than an average would be.</dd>
 <dt>Peak record (10d)</dt><dd>A column of the All holdings table: the hit rate of that holding's confirmed PEAK signals over the next 10 trading days, up to the selected day, as "4 of 6" with the percent and the base rate in the hover text. A dash means no confirmed peak so far in its history, or none old enough to have a 10-day outcome yet (the hover text says which); muted numbers rest on fewer than five outcomes. The full record, for every kind of signal and every horizon, is on the Charts tab.</dd>
+<dt>Conditions</dt><dd>Small gray chips on the Dashboard's PEAK and VALLEY cards and in the Conditions column of the All holdings, Watchlist and Screener tables. They describe where a stock stands on the day shown; they are not signals and say nothing about what comes next. <b>Above 200-day / Below 200-day</b>: the stock closed above (below) its 200-day average, the average close of the last 200 trading days. <b>RSI under 30 lately / RSI over 70 lately</b>: RSI was under 30 (over 70) on at least one of the last 10 trading days. <b>Heavy volume lately</b>: volume (the number of shares traded) was at least twice its 50-day average on at least one of the last 10 trading days. <b>Strong past year / Weak past year</b>: its return over the past year, skipping the latest month, is in the top (bottom) half of S&amp;P 500 stocks on this day; the return runs from about a year ago to about a month ago and counts dividends. The 200-day chip shows whenever it is known; the others show only when they apply. A chip is left out when the data cannot answer the question, for example for a fund with less than 200 days of history, an index without volume figures, or a day the S&amp;P 500 comparison is not available.</dd>
+<dt>Highlight and combinations</dt><dd>A combination is a confirmed signal (stage 3, the crossover) plus one or two conditions on the same day, for example a confirmed valley on a stock that closed above its 200-day average. A ticker matches a combination on a day when it fired that confirmed signal on that day and every condition the combination needs is known and true. The <b>Highlight</b> select on the Dashboard marks the tickers on your list that match one (a tinted card or row with a "Matches" chip) and counts them; the <b>Combination</b> select on the Screener sets the filters to one. The site's owner tested these combinations on ten years of data for the stocks in today's S&amp;P 500, with the combinations fixed in advance, checked on 2017-2022 and again on 2023-2026: each stock's return over the next month (20 trading days) against SPY, compared with the same measure on an ordinary day in the same month. The table gives that difference in percentage points. The hoped-for direction is above zero for valleys and below zero for peaks; every number is within half a point, while a typical stock moves several points against the market in a month. None of the combinations did better than an ordinary day.
+<div class="scroll" id="combo-table"></div></dd>
 </dl>
 
 <h2>Reading the charts</h2>
-<p>The top panel is the closing price. The dashed line is the one-year high up to the selected day. The middle panel is the MACD line (blue), the signal line (orange) and the histogram (green and red bars) with a dotted zero line. Markers on the MACD line are days a signal fired, coloured by stage. The bottom panel is RSI, with dotted lines at 30 and 70. Hover anywhere to read the exact values for that day.</p>
+<p>The top panel is the closing price. The dashed line is the one-year high up to the selected day. The thin dashed teal line is the 200-day average of the close, drawn where the history is long enough; when it is far from the prices shown it runs off the panel, and the hover readout still gives its value. The middle panel is the MACD line (blue), the signal line (orange) and the histogram (green and red bars) with a dotted zero line. Markers on the MACD line are days a signal fired, colored by stage. The bottom panel is RSI, with dotted lines at 30 and 70. Hover anywhere to read the exact values for that day.</p>
 <div class="ex">A typical peak sequence on the chart: the green histogram bars get shorter (early warning), the blue MACD line flattens and tips over (MACD turned), then the blue line drops through the orange line and the bars turn red (CONFIRMED).</div>
 
 <h2>Things to keep in mind</h2>
-<p>MACD is built from averages, so it lags. By the time a crossover is confirmed, part of the move has already happened. It also gives plenty of false alarms in sideways markets. Treat these signals as a prompt to look, not as a verdict. A valley signal on a stock in a long decline is common on the way down; the "% below 1-yr high" column shows how far it has fallen, not whether it has stopped. The distance to a sell target or a trailing stop is arithmetic on a number you typed in, not a forecast of where the price is going. A track-record hit rate close to the base rate means the signal added nothing on that ticker over the past year, and even one well above it is a handful of cases from a single year. Prices come from Yahoo Finance and can occasionally be late or missing; the footer shows how many tickers failed or were kept from the previous night. Nothing here is financial advice.</p>
+<p>MACD is built from averages, so it lags. By the time a crossover is confirmed, part of the move has already happened. It also gives plenty of false alarms in sideways markets. Treat these signals as a prompt to look, not as a verdict. A valley signal on a stock in a long decline is common on the way down; the "% below 1-yr high" column shows how far it has fallen, not whether it has stopped. The distance to a sell target or a trailing stop is arithmetic on a number you typed in, not a forecast of where the price is going. A track-record hit rate close to the base rate means the signal added nothing on that ticker over the past year, and even one well above it is a handful of cases from a single year. A condition or combination describes a stock today. In the site's ten-year test none of them predicted what came next. Prices come from Yahoo Finance and can occasionally be late or missing; the footer shows how many tickers failed or were kept from the previous night. Nothing here is financial advice.</p>
 
 <h2>About this site</h2>
 <p>The prices come from Yahoo Finance and are downloaded once a night by a free, automated GitHub job; everything is computed as of the last completed trading day. <span id="params-note"></span></p>

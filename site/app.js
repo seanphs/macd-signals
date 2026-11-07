@@ -3,7 +3,10 @@
    (both written by the nightly job), plus data/screener.json for the Screener tab, keeps the
    viewer's lists in the page address and in this browser, keeps the viewer's optional holding
    details (shares, cost, dates, targets) in this browser only, and draws the dashboard, the
-   screener, the charts (each with the ticker's track record) and the glossary.
+   screener, the charts (each with the ticker's track record) and the glossary. It also shows a
+   few plain conditions (200-day average, recent RSI extremes, heavy volume, past-year strength)
+   and lets the viewer highlight or filter by combinations of them with a confirmed signal; each
+   combination shows its test result, which was no better than an ordinary day.
    Nothing here is advice: the page only describes what an indicator is doing. */
 'use strict';
 (function () {
@@ -34,7 +37,9 @@ const RSI_OPTS = {
   all: [[0, 'any']],
 };
 const RSI_DEFAULT = {valley: 40, recover: 40, peak: 60, all: 0};
-const SCREEN_DEFAULTS = {show: 'valley', stage: 0, rsi: 40, within: 10, below: 0, group: 'all', choppy: true, notmine: false};
+// The last four are the condition filters (docs/COMBOS.md): 200-day average, RSI lately, heavy volume, past year.
+const SCREEN_DEFAULTS = {show: 'valley', stage: 0, rsi: 40, within: 10, below: 0, group: 'all', choppy: true, notmine: false,
+  ma: 'any', rsil: 'any', heavy: false, year: 'any'};
 // Holding details (localStorage "macd-holdings": shares, cost, purchase date, sell target and
 // trailing stop per holding; all optional, never in the page address). Field key and column label.
 const HOLD_FIELDS = [['shares', 'Shares'], ['cost', 'Avg cost'], ['date', 'Bought'], ['target', 'Sell target'], ['trail', 'Trailing stop %']];
@@ -48,6 +53,43 @@ const RECORD_GROUPS = [['PEAK', 1], ['PEAK', 2], ['PEAK', 3], ['VALLEY', 1], ['V
 const RECORD_MIN = 5;                             // outcomes a group needs before its numbers are shown in full
 const PEAK_RECORD_H = 10;                         // the horizon the holdings column uses
 const TOO_FEW = 'Too few signals to judge';
+// Conditions and combinations (docs/COMBOS.md). A condition describes where a stock stands on a
+// day; it is not a signal. The rules are the same as fetch_data.py's conditions_at().
+const LATELY = 10;                                // "lately" = on at least one of the last 10 trading days
+const RSI_LO = 30, RSI_HI = 70, HEAVY_X = 2;      // RSI under 30 / over 70; volume at least twice its 50-day average
+// The chips, in display order: [does the chip apply to conditions c, label, title text].
+const COND_CHIPS = [
+  [c => c.above200 === true, 'Above 200-day', 'Closed above its 200-day average'],
+  [c => c.above200 === false, 'Below 200-day', 'Closed below its 200-day average'],
+  [c => c.rsi_lo === true, 'RSI under 30 lately', 'RSI was under 30 on at least one of the last 10 trading days'],
+  [c => c.rsi_hi === true, 'RSI over 70 lately', 'RSI was over 70 on at least one of the last 10 trading days'],
+  [c => c.heavy === true, 'Heavy volume lately', 'Volume was at least twice its 50-day average on at least one of the last 10 trading days'],
+  [c => c.year === 'strong', 'Strong past year', 'Its return over the past year, skipping the latest month, is in the top half of S&P 500 stocks on this day'],
+  [c => c.year === 'weak', 'Weak past year', 'Its return over the past year, skipping the latest month, is in the bottom half of S&P 500 stocks on this day'],
+];
+// The header of the Conditions column in the Dashboard and Screener tables (not sortable).
+const COND_TH = '<th class="nosort" title="Where the ticker stands on its day: hover a chip for its meaning. A description, not a signal.">Conditions</th>';
+// A combination: a confirmed (stage 3) signal of one direction plus required conditions. dev and
+// hold are the owner's test results on S&P 500 stocks (2017-2022 and 2023-2026): the average
+// 20-trading-day return versus SPY, minus the same for an ordinary day in the same month, in
+// percentage points. None of them did better than an ordinary day.
+const COMBOS = [
+  {id: 'V1', label: 'Valley + above 200-day average', dir: 'VALLEY', req: {above200: true}, dev: -0.14, hold: -0.30},
+  {id: 'V2', label: 'Valley + RSI under 30 lately', dir: 'VALLEY', req: {rsi_lo: true}, dev: -0.04, hold: -0.21},
+  {id: 'V3', label: 'Valley + heavy volume lately', dir: 'VALLEY', req: {heavy: true}, dev: -0.02, hold: 0.17},
+  {id: 'V4', label: 'Valley + strong past year', dir: 'VALLEY', req: {year: 'strong'}, dev: -0.13, hold: -0.12},
+  {id: 'V5', label: 'Valley + above 200-day + strong year', dir: 'VALLEY', req: {above200: true, year: 'strong'}, dev: -0.24, hold: -0.21},
+  {id: 'P1', label: 'Peak + below 200-day average', dir: 'PEAK', req: {above200: false}, dev: 0.35, hold: 0.22},
+  {id: 'P2', label: 'Peak + RSI over 70 lately', dir: 'PEAK', req: {rsi_hi: true}, dev: 0.24, hold: -0.38},
+  {id: 'P3', label: 'Peak + heavy volume lately', dir: 'PEAK', req: {heavy: true}, dev: 0.06, hold: -0.07},
+  {id: 'P4', label: 'Peak + weak past year', dir: 'PEAK', req: {year: 'weak'}, dev: 0.22, hold: -0.19},
+  {id: 'P5', label: 'Peak + below 200-day + weak year', dir: 'PEAK', req: {above200: false, year: 'weak'}, dev: 0.40, hold: 0.17},
+];
+// The confirmed signals with no condition at all, for the Info tab's table only.
+const COMBO_ALONE = [
+  {id: 'V0', label: 'Confirmed valley alone', dir: 'VALLEY', dev: 0.00, hold: -0.10},
+  {id: 'P0', label: 'Confirmed peak alone', dir: 'PEAK', dev: 0.05, hold: -0.10},
+];
 
 // ---- state ---------------------------------------------------------------
 const S = {
@@ -73,6 +115,7 @@ const S = {
   holdDetails: {},         // ticker -> {shares, cost, date, target, trail} the viewer entered (validated; browser only)
   holdMsgs: [],            // messages about the last "Save details" ([kind, text]); shown under the details table
   backupMsgs: [],          // messages about the last "Restore from backup"
+  combo: null,             // id of the combination the Dashboard highlights (localStorage "macd-combo"); null = None
 };
 const SORT = {holdings: {col: 'off', asc: true}, watch: {col: 'default', asc: true}, screen: {col: 'default', asc: true}};
 
@@ -440,6 +483,7 @@ function row(sym, day) {  // everything the page shows for one ticker on one day
     trend: isNum(prev) ? (hist > prev ? 'rising' : 'falling') : 'flat',
     stale: f.dates[i] !== day || indexStale(sym),
     group: isHolding(sym) ? 'holdings' : 'watch',
+    cond: condsAt(f, i, f.dates[i]),  // where the ticker stands on its bar (docs/COMBOS.md)
   };
 }
 function hasDir(r, dir) { return r.sigs.some(s => s.dir === dir); }
@@ -701,6 +745,95 @@ function recordCell(r) { return r.rec ? rateCell(r.rec.hits, r.rec.outcomes, r.r
 function recordSort(r) { return r.rec && r.rec.outcomes ? [r.rec.hits / r.rec.outcomes, r.rec.count] : null; }
 function recordTier(r) { return r.rec && r.rec.outcomes >= RECORD_MIN ? 0 : 1; }
 
+// ---- conditions and combinations (docs/COMBOS.md) ------------------------
+// A condition says where a stock stands on a day (above its 200-day average, RSI under 30
+// lately, ...). It is null ("unknown") when the data cannot answer it, for example in a file
+// written before the condition arrays existed; an unknown condition never shows a chip and
+// never matches a filter or a combination.
+function emptyCond() { return {above200: null, rsi_lo: null, rsi_hi: null, heavy: null, year: null, mom: null, volx: null}; }
+// One of the optional arrays of a ticker file (sma200, mom, volx); null when the file lacks it.
+function arrOf(f, k) { return f && Array.isArray(f[k]) && f[k].length === f.dates.length ? f[k] : null; }
+// The conditions of ticker file f at bar i. day is the date whose S&P 500 median past-year
+// return (index.json's mom_median) the ticker is compared with: the bar's own date, f.dates[i].
+function condsAt(f, i, day) {
+  const c = emptyCond();
+  if (!f || i < 0 || i >= f.dates.length) return c;
+  const sma = arrOf(f, 'sma200'), mom = arrOf(f, 'mom'), volx = arrOf(f, 'volx');
+  if (sma && isNum(sma[i]) && isNum(f.close[i])) c.above200 = f.close[i] > sma[i];
+  // true when the test holds on at least one of the last LATELY bars; null when any of them has no value
+  const lately = (a, test) => {
+    if (!a || i < LATELY - 1) return null;
+    const w = a.slice(i - LATELY + 1, i + 1);
+    return w.every(isNum) ? w.some(test) : null;
+  };
+  c.rsi_lo = lately(f.rsi, v => v < RSI_LO);
+  c.rsi_hi = lately(f.rsi, v => v > RSI_HI);
+  c.heavy = lately(volx, v => v >= HEAVY_X);
+  if (mom && isNum(mom[i])) c.mom = mom[i];
+  if (volx && isNum(volx[i])) c.volx = volx[i];
+  const mm = S.index && S.index.mom_median;
+  const med = mm && typeof mm === 'object' && hasOwn(mm, day) ? mm[day] : null;
+  if (isNum(c.mom) && isNum(med)) c.year = c.mom > med ? 'strong' : c.mom < med ? 'weak' : 'mid';
+  return c;
+}
+// The same object from screener.json's "cond" (anything unexpected counts as unknown).
+function condFromJSON(o) {
+  const c = emptyCond();
+  if (!o || typeof o !== 'object') return c;
+  ['above200', 'rsi_lo', 'rsi_hi', 'heavy'].forEach(k => { if (typeof o[k] === 'boolean') c[k] = o[k]; });
+  if (['strong', 'weak', 'mid'].includes(o.year)) c.year = o.year;
+  if (isNum(o.mom)) c.mom = o.mom;
+  if (isNum(o.volx)) c.volx = o.volx;
+  return c;
+}
+// Small neutral chips for the conditions that are known: the 200-day chip whenever it is known,
+// the others only when true (and the past year only when strong or weak). '' when none apply.
+function condChips(c) {
+  return c ? COND_CHIPS.filter(([test]) => test(c)).map(([, label, title]) => `<span class="chip cond" title="${esc(title)}">${esc(label)}</span>`).join('') : '';
+}
+function comboById(id) { return COMBOS.find(cb => cb.id === id) || null; }
+function activeCombo() { return comboById(S.combo); }
+// A row matches a combination when it has a confirmed (stage 3) signal of that direction on its
+// day and every required condition is true (an unknown condition never matches).
+function comboMatch(r, cb) {
+  return !!cb && !!r.cond && r.sigs.some(s => s.dir === cb.dir && s.stage === 3) && Object.keys(cb.req).every(k => r.cond[k] === cb.req[k]);
+}
+// The sentence shown wherever a combination is offered; the numbers are signed, two decimals.
+function testNote(cb) {
+  return `Tested on S&P 500 stocks from 2017 to 2026: in the month after this combination, stocks did about the same as on an ordinary day (${fmt(cb.dev, 2)} and ${fmt(cb.hold, 2)} points versus an ordinary day). It describes today, not what comes next.`;
+}
+// The chips line of a Dashboard card or table row: a "Matches" chip first when the row matches
+// the highlighted combination, then the condition chips. '' when there is nothing to show.
+function condLine(r) {
+  const cb = activeCombo();
+  const match = r.hl && cb ? `<span class="chip cond match" title="${esc('Matches the highlighted combination: ' + cb.label)}">Matches</span>` : '';
+  return match + condChips(r.cond);
+}
+function condCell(r) { const l = condLine(r); return `<td class="condcell">${l ? `<div class="conds">${l}</div>` : ''}</td>`; }
+// The options of the Dashboard's Highlight select and the Screener's Combination select.
+function comboOptionsHTML(first) {
+  return first + [['VALLEY', 'Valleys'], ['PEAK', 'Peaks']].map(([dir, label]) =>
+    `<optgroup label="${label}">${COMBOS.filter(cb => cb.dir === dir).map(cb => `<option value="${esc(cb.id)}">${esc(cb.label)}</option>`).join('')}</optgroup>`).join('');
+}
+// The Screener filters a combination stands for: its direction, stage 3, RSI / below-high any,
+// choppy shown, and exactly its conditions (the others any/off). Group and "not on my list" stay.
+function comboFilters(cb) {
+  return {show: cb.dir === 'PEAK' ? 'peak' : 'valley', stage: 3, rsi: 0, below: 0, choppy: false,
+    ma: cb.req.above200 === true ? 'above' : cb.req.above200 === false ? 'below' : 'any',
+    rsil: cb.req.rsi_lo ? 'lo' : cb.req.rsi_hi ? 'hi' : 'any',
+    heavy: cb.req.heavy === true, year: cb.req.year || 'any'};
+}
+// The combination whose settings the Screener's filters equal exactly, or null (= Custom).
+function comboOfFilters(F) {
+  return COMBOS.find(cb => { const s = comboFilters(cb); return Object.keys(s).every(k => F[k] === s[k]); }) || null;
+}
+// The Info tab's test table: every combination plus the confirmed signal alone, valleys then peaks.
+function comboTableHTML() {
+  const rows = [COMBO_ALONE[0]].concat(COMBOS.filter(cb => cb.dir === 'VALLEY'), [COMBO_ALONE[1]], COMBOS.filter(cb => cb.dir === 'PEAK'));
+  return `<table class="plain combos"><thead><tr><th>Combination</th><th class="num">2017-2022</th><th class="num">2023-2026</th></tr></thead><tbody>${
+    rows.map(cb => `<tr><td>${esc(cb.label)}</td><td class="num">${esc(fmt(cb.dev, 2))}</td><td class="num">${esc(fmt(cb.hold, 2))}</td></tr>`).join('')}</tbody></table>`;
+}
+
 function rank(r) {  // peaks first, then valleys, then higher stage, then closeness to the high
   const p = topSignal(r.sigs, 'PEAK'), v = topSignal(r.sigs, 'VALLEY');
   if (p) return [0, -p.stage, r.pct];
@@ -761,9 +894,10 @@ function card(r, dir) {
   if (r.rsi >= 70) badges.push('<span class="badge flag">RSI 70+</span>');
   if (r.weak) badges.push('<span class="badge choppy">choppy</span>');
   const detail = mine.map(s => s.detail).filter(Boolean).join('; ');
-  return `<div class="card ${dir.toLowerCase()} s${top.stage}">
+  const conds = condLine(r);
+  return `<div class="card ${dir.toLowerCase()} s${top.stage}${r.hl ? ' hl' : ''}">
     <div class="card-head">${symlink(r.sym, true)}${badges.join('')}${staleBadge(r)}<span class="price">close ${fmtClose(r.close)}</span></div>
-    <div class="name">${esc(r.name)}</div>${posLine(r)}
+    <div class="name">${esc(r.name)}</div>${posLine(r)}${conds ? `<div class="conds">${conds}</div>` : ''}
     <div class="stepper">${steps}</div>
     <div class="metrics">
       <div class="metric"><div class="label"><span>RSI (14)</span><b>${isNum(r.rsi) ? r.rsi.toFixed(0) : '–'}</b></div>${meter(r.rsi, rsiClass(r.rsi), [30, 70])}</div>
@@ -808,14 +942,16 @@ function tableHTML(rows, key, days, extra) {
   const cols = [
     ['symbol', 'Ticker'], ['name', 'Name'], ['today', 'Signal'], ['macd', 'MACD vs signal'], ['hist', `Histogram (${rangeLabel()})`],
     ['close', 'Close'], ['rsi', 'RSI'], ['off', '% below 1-yr high']].concat(extra, [['recent', `Recent (${rangeLabel()})`]]);
-  const ths = sortHeaders(cols, key);
+  // The Conditions column (not sortable) sits right after Signal.
+  const ths = sortHeaders(cols.slice(0, 3), key) + COND_TH + sortHeaders(cols.slice(3), key);
   const body = rows.map(r => {
     const t = r.sigs.length ? r.sigs.map(badge).join(' ') : '<span class="sub">–</span>';
-    const rc = hasDir(r, 'PEAK') ? 'has-peak' : hasDir(r, 'VALLEY') ? 'has-valley' : '';
+    const rc = (hasDir(r, 'PEAK') ? 'has-peak' : hasDir(r, 'VALLEY') ? 'has-valley' : '') + (r.hl ? ' hl' : '');
     return `<tr class="${rc}">
       <td><b>${symlink(r.sym)}</b>${r.weak ? ' <span class="badge choppy">choppy</span>' : ''}${staleBadge(r)}</td>
       <td class="name" title="${esc(r.name)}">${esc(r.name)}</td>
       <td>${t}</td>
+      ${condCell(r)}
       <td>${r.side}, ${r.trend}</td>
       <td>${spark(r, S.rangeN)}</td>
       <td class="num">${fmtClose(r.close)}</td>
@@ -847,6 +983,16 @@ function renderDash() {
   const rows = loadedListed().map(s => row(s, day)).filter(Boolean);
   const hold = rows.filter(r => r.group === 'holdings'), watch = rows.filter(r => r.group !== 'holdings');
   $('rangenote').textContent = rangeLabel();
+  // Highlight (docs/COMBOS.md): with a combination chosen, the rows that match it are marked and a
+  // line under the stats says how many there are, with the combination's test result. With None
+  // nothing is marked and the line is hidden.
+  const cb = activeCombo();
+  rows.forEach(r => { r.hl = comboMatch(r, cb); });
+  if (cb) {
+    const n = rows.filter(r => r.hl).length;
+    $('hl-line').innerHTML = `<b>${esc(cb.label)}</b>: ${n} of your tickers ${n === 1 ? 'matches' : 'match'} on ${esc(day)}. <span class="sub">${esc(testNote(cb))}</span>`;
+  }
+  $('hl-line').hidden = !cb;
   // The viewer's holding details (shares, cost, ...) and what they add; weight needs the total first.
   // Each holding's confirmed-peak record, for the "Peak record (10d)" column.
   hold.forEach(r => { r.pos = position(r, day); r.rec = peakRecord(r); });
@@ -975,6 +1121,8 @@ function renderChart() {
   const end = r.i + 1, start = Math.max(0, end - S.rangeN);
   const D = f.dates.slice(start, end), C = f.close.slice(start, end), M = f.macd.slice(start, end),
     Sg = f.signal.slice(start, end), Hs = f.hist.slice(start, end), Rs = f.rsi.slice(start, end);
+  // The 200-day average of the close (docs/COMBOS.md); an empty list for a file without it.
+  const Ma = arrOf(f, 'sma200') ? f.sma200.slice(start, end) : [];
   const n = D.length;
   $('chartmeta').innerHTML = `Close ${fmtClose(r.close)}, RSI ${isNum(r.rsi) ? r.rsi.toFixed(1) : '–'}, ${fmtPct(r.pct)} below 1-yr high, MACD ${fmt(r.macd)} / signal ${fmt(r.signal)} / histogram ${fmt(r.hist)}${r.weak ? ' (choppy)' : ''}${staleBadge(r)}`;
 
@@ -988,6 +1136,10 @@ function renderChart() {
   const nums = a => a.filter(isNum);
   let cmin = Math.min(...nums(C)), cmax = Math.max(...nums(C));
   if (isNum(r.high) && r.high <= cmax * 1.25) cmax = Math.max(cmax, r.high);
+  // Like the 1-yr high, the 200-day average joins the price scale where it is within 25% of the
+  // closes shown; where it is further away it runs off the panel and is clipped there.
+  const lo0 = cmin, hi0 = cmax;
+  nums(Ma).forEach(v => { if (v >= lo0 / 1.25 && v <= hi0 * 1.25) { cmin = Math.min(cmin, v); cmax = Math.max(cmax, v); } });
   const pad = (cmax - cmin) * 0.08 || cmax * 0.02 || 1; cmin -= pad; cmax += pad;
   const y1 = v => T + H1 - (v - cmin) / (cmax - cmin) * H1;
   const mall = nums(M.concat(Sg, Hs, [0])); let mmin = Math.min(...mall), mmax = Math.max(...mall);
@@ -1016,11 +1168,14 @@ function renderChart() {
   const last = C[n - 1];
   const closeY = isNum(last) ? (isNum(r.high) && Math.abs(y1(last) - y1(r.high)) < 16 ? y1(last) + 14 : y1(last) - 6) : 0;
   const closeLabel = isNum(last) ? `<text x="${W - R}" y="${closeY.toFixed(1)}" text-anchor="end" font-weight="600">close ${fmtClose(last)}</text>` : '';
+  // The 200-day average as a thin dashed line, kept inside the price panel; drawn only where the file has it.
+  const hasMa = nums(Ma).length > 0;
+  const maLine = hasMa ? `<clipPath id="priceclip"><rect x="${L}" y="${T}" width="${plotW}" height="${H1}"/></clipPath><path class="ma" clip-path="url(#priceclip)" d="${path(Ma, y1)}"/>` : '';
   box.innerHTML = `<div class="chart-head"><span class="sym">${esc(S.chartSym)}</span><span class="meta">${esc(r.name)}${r.name ? ' · ' : ''}${rangeLabel()}, ${n} trading days, ${esc(D[0])} to ${esc(D[n - 1])}</span>
-      <span class="chart-legend"><span><i style="background:var(--line-price)"></i>Close</span><span><i style="background:var(--line-macd)"></i>MACD</span><span><i style="background:var(--line-signal)"></i>Signal</span><span><i style="background:var(--hist-pos)"></i><i style="background:var(--hist-neg);margin-left:-3px"></i>Histogram</span><span><i style="background:var(--line-rsi)"></i>RSI</span></span></div>
+      <span class="chart-legend"><span><i style="background:var(--line-price)"></i>Close</span>${hasMa ? '<span><i class="dashed"></i>200-day avg</span>' : ''}<span><i style="background:var(--line-macd)"></i>MACD</span><span><i style="background:var(--line-signal)"></i>Signal</span><span><i style="background:var(--hist-pos)"></i><i style="background:var(--hist-neg);margin-left:-3px"></i>Histogram</span><span><i style="background:var(--line-rsi)"></i>RSI</span></span></div>
     <svg class="chart" viewBox="0 0 ${W} ${Htot}" width="${W}" height="${Htot}">
       <text x="${L}" y="${T - 4}" font-weight="600">Close</text>
-      ${g}${hiLine}
+      ${g}${hiLine}${maLine}
       <path class="price" d="${path(C, y1)}"/>${closeLabel}
       <text x="${L}" y="${top2 - 6}" font-weight="600">MACD ${macdLabel()}</text>
       <line class="zero" x1="${L}" x2="${W - R}" y1="${y2(0).toFixed(1)}" y2="${y2(0).toFixed(1)}"/>
@@ -1040,7 +1195,8 @@ function renderChart() {
     const i = Math.max(0, Math.min(n - 1, Math.floor((px - L) / slot)));
     cross.setAttribute('x1', xs(i)); cross.setAttribute('x2', xs(i)); cross.style.display = '';
     const s = marks[D[i]];
-    tip.innerHTML = `<b>${esc(D[i])}</b><br>Close ${fmtClose(C[i])}<br>MACD ${fmt(M[i])} &nbsp; Signal ${fmt(Sg[i])}<br>Histogram ${fmt(Hs[i])}<br>RSI ${isNum(Rs[i]) ? Rs[i].toFixed(1) : '–'}` + (s ? `<br>${s.map(badge).join(' ')}` : '');
+    tip.innerHTML = `<b>${esc(D[i])}</b><br>Close ${fmtClose(C[i])}` + (hasMa ? `<br>200-day avg ${fmtClose(Ma[i])}` : '') +
+      `<br>MACD ${fmt(M[i])} &nbsp; Signal ${fmt(Sg[i])}<br>Histogram ${fmt(Hs[i])}<br>RSI ${isNum(Rs[i]) ? Rs[i].toFixed(1) : '–'}` + (s ? `<br>${s.map(badge).join(' ')}` : '');
     tip.style.display = 'block';
     const bx = box.getBoundingClientRect();
     const left = e.clientX - bx.left + 14, top = e.clientY - bx.top + 14;
@@ -1076,6 +1232,11 @@ function cleanScreenF(o) {
   if (typeof o.group === 'string' && o.group.length <= 60) f.group = o.group;
   if (typeof o.choppy === 'boolean') f.choppy = o.choppy;
   if (typeof o.notmine === 'boolean') f.notmine = o.notmine;
+  // the condition filters (docs/COMBOS.md)
+  if (['any', 'above', 'below'].includes(o.ma)) f.ma = o.ma;
+  if (['any', 'lo', 'hi'].includes(o.rsil)) f.rsil = o.rsil;
+  if (typeof o.heavy === 'boolean') f.heavy = o.heavy;
+  if (['any', 'strong', 'weak'].includes(o.year)) f.year = o.year;
   return f;
 }
 function readStoredScreen() { try { return cleanScreenF(JSON.parse(lsGet('macd-screen') || 'null')); } catch (e) { return cleanScreenF(null); } }
@@ -1093,12 +1254,33 @@ function syncScreenControls() {
   $('sc-group').innerHTML = ['all'].concat(groups).map(x => `<option value="${esc(x)}"${x === g ? ' selected' : ''}>${x === 'all' ? 'All groups' : esc(x)}</option>`).join('');
   $('sc-choppy').checked = F.choppy;
   $('sc-mine').checked = F.notmine;
+  $('sc-ma').value = F.ma;
+  $('sc-rsil').value = F.rsil;
+  $('sc-heavy').checked = F.heavy;
+  $('sc-year').value = F.year;
+  // The Combination select is not stored: it shows a combination whenever the filters equal its
+  // settings exactly, Custom otherwise; with a combination shown, its test result sits under the filters.
+  const cb = comboOfFilters(F);
+  $('sc-combo').value = cb ? cb.id : 'custom';
+  $('sc-combo-note').textContent = cb ? cb.label + ': ' + testNote(cb) : '';
+  $('sc-combo-note').hidden = !cb;
 }
 function readScreenControls() {
   S.screenF = cleanScreenF({show: $('sc-show').value, stage: $('sc-stage').value, rsi: $('sc-rsi').value, within: $('sc-within').value,
     // Until screener.json is in, the Group select only has "All groups"; keep the remembered group then.
     below: $('sc-below').value, group: screenGroups().length ? $('sc-group').value : S.screenF.group,
-    choppy: $('sc-choppy').checked, notmine: $('sc-mine').checked});
+    choppy: $('sc-choppy').checked, notmine: $('sc-mine').checked,
+    ma: $('sc-ma').value, rsil: $('sc-rsil').value, heavy: $('sc-heavy').checked, year: $('sc-year').value});
+  storeScreen();
+  renderScreen();
+}
+// The Combination select: a combination sets the filters it stands for (comboFilters); Group and
+// "Only tickers not on my list" stay as they are. Choosing Custom while a combination is shown
+// clears the four condition filters, so the select can show Custom; the other filters stay.
+function chooseScreenCombo(id) {
+  const cb = comboById(id);
+  if (cb) S.screenF = cleanScreenF(Object.assign({}, S.screenF, comboFilters(cb)));
+  else if (comboOfFilters(S.screenF)) S.screenF = cleanScreenF(Object.assign({}, S.screenF, {ma: 'any', rsil: 'any', heavy: false, year: 'any'}));
   storeScreen();
   renderScreen();
 }
@@ -1133,6 +1315,7 @@ function screenRow(sym, e) {
     side: e.side === 'below' ? 'below' : 'above', trend: ['rising', 'falling', 'flat'].includes(e.trend) ? e.trend : 'flat',
     macdDir: e.macd_dir, sigs: sigsOf(e.today), recent, cross,
     listed: listed().includes(sym), holding: isHolding(sym),
+    cond: condFromJSON(e.cond),  // conditions on the ticker's last bar (docs/COMBOS.md); all unknown in an older screener.json
   };
 }
 function screenMatch(r, F) {
@@ -1153,6 +1336,14 @@ function screenMatch(r, F) {
   if (g !== 'all' && r.group !== g) return false;
   if (F.choppy && r.weak) return false;
   if (F.notmine && r.listed) return false;
+  // Condition filters, under every Show setting: a setting other than any/off only lets through
+  // tickers whose condition is known and equal to it.
+  const c = r.cond;
+  if (F.ma !== 'any' && c.above200 !== (F.ma === 'above')) return false;
+  if (F.rsil === 'lo' && c.rsi_lo !== true) return false;
+  if (F.rsil === 'hi' && c.rsi_hi !== true) return false;
+  if (F.heavy && c.heavy !== true) return false;
+  if (F.year !== 'any' && c.year !== F.year) return false;
   return true;
 }
 // Default order: strongest stage first, then RSI (lowest first for valleys, highest first for
@@ -1193,7 +1384,7 @@ function crossChip(c) {
 function screenTableHTML(rows, days, F) {
   const cols = [['symbol', 'Ticker'], ['name', 'Name'], ['group', 'Group'], ['signal', 'Signal'], ['macd', 'MACD vs signal'],
     ['close', 'Close'], ['rsi', 'RSI'], ['off', '% below 1-yr high'], ['chg1', '1M change'], ['chg3', '3M change'], ['recent', `Recent (${SCREEN_BARS}D)`]];
-  const ths = sortHeaders(cols, 'screen') + '<th></th>';
+  const ths = sortHeaders(cols.slice(0, 4), 'screen') + COND_TH + sortHeaders(cols.slice(4), 'screen') + '<th></th>';
   const body = rows.map(r => {
     const t = r.sigs.length ? r.sigs.slice().sort((a, b) => a.stage - b.stage).map(badge).join(' ') : '<span class="sub">–</span>';
     const chip = F.show === 'recover' && r.cross ? crossChip(r.cross) : '';
@@ -1205,6 +1396,7 @@ function screenTableHTML(rows, days, F) {
       <td class="name" title="${esc(r.name)}">${esc(r.name)}</td>
       <td>${esc(r.group)}</td>
       <td>${t}${chip}</td>
+      ${condCell(r)}
       <td>${r.side}, ${r.trend}</td>
       <td class="num">${fmtClose(r.close)}</td>
       ${rsiCell(r)}
@@ -1254,6 +1446,7 @@ function renderControls() {
   $('prev').disabled = idx <= 0;
   $('next').disabled = idx < 0 || idx >= S.days.length - 1;
   document.querySelectorAll('.seg[id^=rangesel] button').forEach(b => b.classList.toggle('on', +b.dataset.n === S.rangeN));
+  $('combosel').value = S.combo || 'none';
   const nl = listed().length;
   const dayText = S.day ? `Showing ${S.day}${S.index && S.day === S.index.last_bar ? ', the last completed trading day' : ''}.` : '';
   $('subtitle').textContent = S.indexError ? 'Data not available.' : nl ? `${S.lists.h.length} holding${S.lists.h.length === 1 ? '' : 's'}, ${S.lists.w.length} on watch. ${dayText}` : 'No tickers on your list yet.';
@@ -1314,6 +1507,7 @@ function showTab(t) {
   S.tab = t;
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
   TABS.forEach(k => { $('view-' + k).hidden = k !== t; });
+  $('hl-wrap').hidden = t !== 'dash';  // the Highlight select only acts on the Dashboard
   if (t === 'screen') { renderScreen(); loadScreener(); }
   if (t === 'chart') renderChart();
   if (t === 'list') renderEditor();
@@ -1323,6 +1517,9 @@ function showTab(t) {
 function setDay(d) { if (!d || !S.days.includes(d) || d === S.day) return false; S.day = d; render(); return true; }
 
 ['rangesel', 'rangesel2'].forEach(id => { $(id).innerHTML = RANGES.map(([l, n]) => `<button data-n="${n}">${l}</button>`).join(''); });
+$('combosel').innerHTML = comboOptionsHTML('<option value="none">None</option>');
+$('sc-combo').innerHTML = comboOptionsHTML('<option value="custom">Custom</option>');
+$('combo-table').innerHTML = comboTableHTML();
 document.addEventListener('click', e => {
   const rb = e.target.closest('.seg[id^=rangesel] button');
   if (rb) { S.rangeN = +rb.dataset.n; lsSet('macd-range', String(S.rangeN)); render(); return; }
@@ -1355,7 +1552,14 @@ document.addEventListener('click', e => {
     render();
   }
 });
-['sc-show', 'sc-stage', 'sc-rsi', 'sc-within', 'sc-below', 'sc-group', 'sc-choppy', 'sc-mine'].forEach(id => $(id).addEventListener('change', readScreenControls));
+['sc-show', 'sc-stage', 'sc-rsi', 'sc-within', 'sc-below', 'sc-group', 'sc-choppy', 'sc-mine',
+  'sc-ma', 'sc-rsil', 'sc-heavy', 'sc-year'].forEach(id => $(id).addEventListener('change', readScreenControls));
+$('sc-combo').addEventListener('change', e => chooseScreenCombo(e.target.value));
+$('combosel').addEventListener('change', e => {
+  S.combo = comboById(e.target.value) ? e.target.value : null;
+  lsSet('macd-combo', S.combo || 'none');
+  renderDash();
+});
 $('daysel').addEventListener('change', e => setDay(e.target.value));
 $('prev').addEventListener('click', () => { const i = S.days.indexOf(S.day); if (i > 0) setDay(S.days[i - 1]); });
 $('next').addEventListener('click', () => { const i = S.days.indexOf(S.day); if (i >= 0 && i < S.days.length - 1) setDay(S.days[i + 1]); });
@@ -1388,6 +1592,7 @@ $('theme').addEventListener('click', () => {
 async function init() {
   const t = lsGet('macd-theme'); if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
   const r = +lsGet('macd-range'); if (RANGES.some(x => x[1] === r)) S.rangeN = r;
+  const cb = lsGet('macd-combo'); S.combo = comboById(cb) ? cb : null;  // an unknown value means None
   S.screenF = readStoredScreen();
   S.holdDetails = readHoldings();
   initLists();

@@ -33,6 +33,7 @@ docs/SPEC.md                   this file
 docs/SCREENER.md               addendum: the Screener tab and screener.json (2026-11-06)
 docs/HOLDINGS.md               addendum: Holding details on My list and the Dashboard (2026-11-06)
 docs/TRACKRECORD.md            addendum: Track record (Charts tab) and the Peak record (10d) column (2026-11-07)
+docs/COMBOS.md                 addendum: conditions, Highlight, Screener condition filters and combinations, two-year fetch (2026-11-07)
 ```
 
 Paths in the page are relative (`data/index.json`), because GitHub Pages serves a project site
@@ -43,7 +44,7 @@ under `https://<user>.github.io/<repo>/`. Local testing: `python -m http.server 
 
 ```
 python -I fetch_data.py [--universe universe.txt] [--out site/data] [--only T1,T2,...]
-                        [--limit N] [--sleep 0.25] [--range 1y]
+                        [--limit N] [--sleep 0.25] [--range 2y]
 ```
 
 - Reads `universe.txt` with `read_universe(path)`: one ticker per line; `#` starts a comment;
@@ -55,8 +56,9 @@ python -I fetch_data.py [--universe universe.txt] [--out site/data] [--only T1,T
   same way and returns `{ticker: group}` from the `## ` lines (see "universe.txt" below); only
   `screener.json` uses it.
 - `--only` restricts to the listed tickers (testing). `--limit N` takes the first N.
-- Fetch: `https://query1.finance.yahoo.com/v8/finance/chart/<urlencoded sym>?range=1y&interval=1d`
-  with header `User-Agent: Mozilla/5.0`, 20 s socket timeout. Up to 3 attempts with 2 s, 4 s
+- Fetch: `https://query1.finance.yahoo.com/v8/finance/chart/<urlencoded sym>?range=2y&interval=1d`
+  (the `--range` value; two years because the 200-day average and the past-year return of
+  `docs/COMBOS.md` need more than a year of bars) with header `User-Agent: Mozilla/5.0`, 20 s socket timeout. Up to 3 attempts with 2 s, 4 s
   backoff; on HTTP 429 wait 15 s before the next attempt; HTTP 404 is not retried; a non-JSON
   reply (block page) is reported as "Yahoo did not return data (blocked or unavailable)".
   Sequential requests with `--sleep` seconds between tickers.
@@ -73,7 +75,13 @@ python -I fetch_data.py [--universe universe.txt] [--out site/data] [--only T1,T
   `regularMarketTime` at the close) holds the closing quote; when the session has ended, the
   last bar is today's and its close is null, use that quote as the close (counted and reported
   in one log line). macd_scan.py runs in the morning, when the bar is settled, so it never sees
-  this state.
+  this state. The same selection also yields Yahoo's `adjclose` and `volume` for the same bars
+  (null where absent; the quote-filled bar keeps whatever Yahoo sent, often null).
+- Published window: of the completed bars, only those dated later than the same calendar day one
+  year before the last bar (29 Feb counts as 28 Feb) go into the file. That is the window a `1y`
+  fetch returns, so `dates`, `close`, the MACD trio, `rsi` and `events` are computed on this
+  window exactly as from a one-year download; only `sma200`, `mom` and `volx` use the whole
+  two-year series (`docs/COMBOS.md`).
 - Name: `meta.shortName` or `meta.longName`, else the symbol. Also keep `meta.currency`,
   `meta.exchangeName`.
 - Compute, using functions copied verbatim from macd_scan.py (same EMA seeding: SMA of the first n
@@ -87,10 +95,13 @@ python -I fetch_data.py [--universe universe.txt] [--out site/data] [--only T1,T
 - Exit code 0 normally. Exit 1 if fewer than half of the universe ended up with a usable file
   (fresh or cached), so a broken night fails visibly instead of publishing an empty site, or if
   universe.txt is missing or empty. A `--only` run always exits 0.
-- After the fetch loop, before `index.json`, writes `site/data/screener.json` (`build_screener`;
-  shape and rules in `docs/SCREENER.md`), logging one line `screener: N tickers, M left out`; if
-  that fails it prints `screener.json was not written: <error>` and carries on, because
-  `index.json` and the summary line matter more.
+- After the fetch loop, before `index.json`, computes `mom_median` (`build_mom_median`; logged
+  as `mom_median: N trading days`, or `mom_median was not computed: <error>` and `{}` on
+  failure) and then writes `site/data/screener.json` (`build_screener`, which receives the
+  `mom_median` map; shape and rules in `docs/SCREENER.md` and `docs/COMBOS.md`), logging one
+  line `screener: N tickers, M left out`; if that fails it prints
+  `screener.json was not written: <error>` and carries on, because `index.json` and the
+  summary line matter more.
 - Prints one progress line per 50 tickers and a final summary:
   `fetched N  stale M  failed K  last_bar YYYY-MM-DD  elapsed Ss`.
 - Python 3.9+, standard library only, no network other than Yahoo.
@@ -106,13 +117,24 @@ python -I fetch_data.py [--universe universe.txt] [--out site/data] [--only T1,T
  "signal": [null, "..."],
  "hist":   [null, "..."],
  "rsi":    [null, "... 14 nulls then numbers"],
- "events": {"2026-10-28": [{"dir": "PEAK", "stage": 3, "detail": "MACD crossed below signal line"}]}}
+ "events": {"2026-10-28": [{"dir": "PEAK", "stage": 3, "detail": "MACD crossed below signal line"}]},
+ "sma200": [224.3975, "..."],
+ "mom":    [null, null, 18.52, "..."],
+ "volx":   [1.02, "..."]}
 ```
 
-All six arrays have the same length as `dates` (ascending, completed daily bars, about 250).
-`events` has a key only for days with at least one signal; `dir` is `PEAK` or `VALLEY`, `stage`
-is 1 (early warning), 2 (MACD turned) or 3 (CONFIRMED crossover), `detail` is macd_scan's text.
-A stale file is simply the previous night's file left in place.
+`dates` and every array have the same length (ascending, completed daily bars of the published
+window, about 250). `events` has a key only for days with at least one signal; `dir` is `PEAK`
+or `VALLEY`, `stage` is 1 (early warning), 2 (MACD turned) or 3 (CONFIRMED crossover), `detail`
+is macd_scan's text. The last three arrays are computed over the whole two-year download and
+then cut to the published window (`docs/COMBOS.md` has the definitions): `sma200`, the mean raw
+close of the 200 bars ending at that bar (4 decimals); `mom`, the past-year return skipping the
+latest month from `adjclose`, `(adj[k-21] / adj[k-252] - 1) * 100` (2 decimals); `volx`, the
+day's volume over the mean volume of the 50 bars before it (2 decimals). Each is null where its
+history or input is missing, so a ticker listed less than about a year ago has mostly null
+`sma200` / `mom`. A stale file is simply the previous night's file left in place, and a file
+written before 2026-11-07 has none of the three arrays; the page and `screener.json` treat a
+missing array as all null.
 
 ### site/data/index.json
 
@@ -120,20 +142,27 @@ A stale file is simply the previous night's file left in place.
 {"generated": "2026-10-30T02:45:12Z", "last_bar": "2026-10-29", "count": 812,
  "params": {"fast": 12, "slow": 26, "signal": 9, "rsi": 14, "weak_pct": 0.25},
  "tickers": {"AAPL": {"name": "Apple Inc.", "last_bar": "2026-10-29", "stale": false}},
- "failed": {"XYZ": "HTTP Error 404: Not Found"}}
+ "failed": {"XYZ": "HTTP Error 404: Not Found"},
+ "mom_median": {"2026-10-29": 8.76}}
 ```
 
 `last_bar` is the most common last date across tickers (so one lagging ticker does not define
 it). `tickers` lists every ticker that has a data file, fresh or stale. `params` lets the page
 show the settings and compute `weak` (|MACD| / close * 100 < weak_pct) exactly as the scanner.
+`mom_median` is, per date, the median `mom` of the `S&P 500` group's files (fresh or stale) that
+have a value that day, only for dates with at least 100 such values; it splits "strong" from
+"weak past year" (`docs/COMBOS.md`). It is `{}` when it could not be computed, and thin or empty
+after a small `--only` run.
 
 ### site/data/screener.json
 
 The latest trading day for every ticker that has a file (fresh or stale): close, RSI, the MACD
 trio, choppiness, % below the one-year high, 1M / 3M change, the day's events, the events of
 the last 21 bars and the most recent confirmed crossover, plus the ticker's `group` from
-`universe.txt`. Same `generated` / `last_bar` / `params` as `index.json`. The exact shape and
-every rule are in `docs/SCREENER.md`.
+`universe.txt` and `cond`, the ticker's conditions on its last bar (200-day average, RSI
+lately, heavy volume lately, past year; rules in `docs/COMBOS.md`). Same `generated` /
+`last_bar` / `params` as `index.json`. The exact shape and every rule are in
+`docs/SCREENER.md` and, for `cond`, `docs/COMBOS.md`.
 
 ## universe.txt
 
@@ -268,6 +297,15 @@ target or trailing stop. SPY's file is loaded whenever it is in the data set, fo
 "vs SPY (1M)" column, without being shown as a watch ticker. The page measures distance to the
 viewer's own numbers and never suggests a target, a stop, or an action.
 
+Conditions and Highlight (`docs/COMBOS.md`): a line of small neutral condition chips (200-day
+average, RSI lately, heavy volume lately, past year) on the PEAK and VALLEY cards and a
+non-sortable **Conditions** column after **Signal** in the All holdings and Watchlist tables;
+a labeled **Highlight** select next to the range selector (None, or one of ten combinations
+of a confirmed signal with conditions; remembered in localStorage `macd-combo`; shown on the
+Dashboard tab only) that marks matching cards and rows (class `hl`, a "Matches" chip) and adds
+a line under the stats with the match count and the combination's test result. With None the
+Dashboard shows no highlight.
+
 ### Screener tab
 
 Between Dashboard and Charts (tab order: Dashboard, Screener, Charts, Info, My list). Every
@@ -276,17 +314,21 @@ day picker does not apply), with Show / Stage at least / RSI / Below 1-yr high a
 filters, a Hide choppy checkbox, an "Only tickers not on my list" checkbox, a sortable table
 and an Add to watch button per row. Filters are remembered in localStorage `macd-screen`. The
 file is loaded the first time the tab is shown. Everything about it, including the Info tab
-additions, is specified in `docs/SCREENER.md`.
+additions, is specified in `docs/SCREENER.md`; the condition filters (200-day average, RSI
+lately, Heavy volume lately, Past year), the **Combination** preset select, its test note and
+the **Conditions** column are specified in `docs/COMBOS.md`.
 
 ### Charts tab
 
 A ticker select (holdings first, then watch; plus the ticker opened from the Screener, shown as
 "AAPL (screener)", when it is not on either list) and the range selector. One inline SVG chart with
-three panels: price (with a dashed 1-year-high line and the close value label), MACD (MACD line
+three panels: price (with a dashed 1-year-high line, the close value label and, where the file
+has it, the 200-day average `sma200` as a thin dashed line in the `--ma` color; see
+`docs/COMBOS.md`), MACD (MACD line
 blue, signal line orange, histogram bars green/red, dotted zero line, markers on the MACD line on
-days a signal fired, coloured by stage), RSI (line with dotted 30 / 70 guides). Hover shows a
-crosshair with date, close, MACD, signal, histogram, RSI. Clicking a ticker anywhere on the
-Dashboard tab opens it here.
+days a signal fired, colored by stage), RSI (line with dotted 30 / 70 guides). Hover shows a
+crosshair with date, close, the 200-day average (when present), MACD, signal, histogram, RSI.
+Clicking a ticker anywhere on the Dashboard tab opens it here.
 
 - Under the chart box, a "Track record for <TICKER>" section: a table of what the close did 5,
   10 and 20 trading days after each past signal, one row per stage group with "Hit rate" (as
@@ -303,9 +345,10 @@ other numbers, Reading the charts, Things to keep in mind), adjusted for this pa
 is a full year from the first visit rather than filling in day by day; add a short "About this
 site" section: data from Yahoo Finance fetched once a night by a free GitHub job, computed as of
 the last completed trading day, your list stays in your browser, not financial advice. The
-Screener's glossary entries are in `docs/SCREENER.md` and the Holding details entries (Holding
+Screener's glossary entries are in `docs/SCREENER.md`, the Holding details entries (Holding
 details, Value / Weight / Gain since cost, Sell target, Trailing stop, Held / long-term,
-vs SPY (1M)) in `docs/HOLDINGS.md`.
+vs SPY (1M)) in `docs/HOLDINGS.md`, and the Conditions and Highlight and combinations entries
+(with the test table) in `docs/COMBOS.md`.
 
 ### Footer
 
@@ -352,7 +395,7 @@ It is not financial advice."
 Written for a non-developer who owns the repo. README: what the site is, how the nightly job
 works, how to add tickers (edit `universe.txt` in the GitHub web editor, commit, optionally run
 the workflow by hand; the ticker goes under `## Added by the owner`), how to share the site, how
-to read the page (short, including a Screener paragraph, a Holding details paragraph and a Track record paragraph; the Info tab has the rest), troubleshooting (Actions tab shows red: open the run, read the summary line; Yahoo
+to read the page (short, including a Screener paragraph, a Holding details paragraph, a Track record paragraph and a Conditions and combinations paragraph; the Info tab has the rest), troubleshooting (Actions tab shows red: open the run, read the summary line; Yahoo
 blocked; schedule disabled after inactivity; page shows old data: hard refresh), privacy (lists
 stay in viewers' browsers; the share link contains the list; the repo is public but contains no
 personal data), not financial advice. SETUP: numbered steps with the exact labels of GitHub's

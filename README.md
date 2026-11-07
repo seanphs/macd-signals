@@ -1,9 +1,9 @@
 # MACD Signals
 
 A small website that shows what two common stock-chart indicators, **MACD** and **RSI**, are
-doing for the tickers you choose. Every weeknight a free GitHub job downloads a year of daily
-prices for about 800 tickers from Yahoo Finance, works out the numbers and the signals, and
-publishes them to the site. Each visitor keeps their own list of tickers in their own browser.
+doing for the tickers you choose. Every weeknight a free GitHub job downloads two years of daily
+prices for about 800 tickers from Yahoo Finance, works out the numbers and the signals for the
+latest year, and publishes them to the site. Each visitor keeps their own list of tickers in their own browser.
 There is nothing to install, no login and no cost.
 
 **Screener.** Besides your own list, the **Screener** tab shows every ticker in the data set
@@ -42,6 +42,24 @@ gains a **Peak record (10d)** column: the ten-day hit rate of the holding's conf
 signals. Fewer than about 10 signals is too few to judge, and a year of daily data rarely has
 more. All of this describes the past; none of it is a prediction.
 
+**Conditions and combinations.** Small gray chips next to a ticker describe where the stock
+stands on the day you picked: **Above 200-day** or **Below 200-day** (its close compared with
+the average close of the last 200 trading days), **RSI under 30 lately** or **RSI over 70
+lately** (on at least one of the last 10 trading days), **Heavy volume lately** (at least twice
+the usual number of shares changed hands on one of the last 10 trading days) and **Strong past
+year** or **Weak past year** (its return over the past year, leaving out the latest month, is
+in the top or bottom half of S&P 500 stocks that day). They appear on the Dashboard cards and in
+a **Conditions** column of the holdings, watchlist and Screener tables. A **Highlight** menu on
+the Dashboard marks the tickers on your list that match a *combination*: a confirmed signal plus
+one or two of these conditions on the same day. On the Screener, a filter for each condition
+and a **Combination** menu that sets them all at once do the same across the whole data set.
+The site's owner tested all ten combinations on ten years of S&P 500 data, and none of them
+predicted what a stock did over the next month any better than an ordinary day did; the page
+shows that result wherever a combination is offered. The chips describe today. They are not
+advice and not a forecast. (The 200-day average and the past-year return need more than a year
+of prices, which is why the nightly job downloads two years; the page still shows the latest
+year.)
+
 **This site is not financial advice.** It describes what an indicator is doing. It does not tell
 anyone what to buy or sell.
 
@@ -58,9 +76,11 @@ not need anything. [SETUP.md](SETUP.md) walks through creating the account and e
    with `## ` (two hashes) name the groups the Screener's **Group** filter offers: `## Indexes`,
    `## S&P 500`, `## Nasdaq-100`, `## ETFs`, `## Other stocks` and `## Added by the owner`.
 2. Every Monday to Friday night (US time) GitHub runs the job described in
-   `.github/workflows/update.yml`. The job runs `fetch_data.py`, which downloads a year of daily
-   closing prices for each ticker from Yahoo Finance, computes MACD, RSI and the signals, and
-   writes a one-line-per-ticker summary of the latest day for the Screener (`screener.json`).
+   `.github/workflows/update.yml`. The job runs `fetch_data.py`, which downloads two years of
+   daily prices for each ticker from Yahoo Finance, computes MACD, RSI and the signals for the
+   latest year (exactly as from a one-year download), uses the longer history only for the
+   200-day average, the past-year return and the volume comparison, and writes a
+   one-line-per-ticker summary of the latest day for the Screener (`screener.json`).
 3. The job publishes the `site` folder together with the computed data using **GitHub Pages**,
    GitHub's free website hosting. The site address looks like
    `https://<your-username>.github.io/macd-signals/`.
@@ -103,6 +123,7 @@ Details worth knowing:
 | `docs/SCREENER.md` | The same for the Screener tab and `screener.json`. |
 | `docs/HOLDINGS.md` | The same for the Holding details table and the portfolio columns it adds to the Dashboard. |
 | `docs/TRACKRECORD.md` | The same for the Track record section on the Charts tab and the Peak record column. |
+| `docs/COMBOS.md` | The same for the condition chips, the Highlight menu, the Screener's condition filters and combinations, and the two-year download. |
 
 A "repository" is GitHub's word for one project's folder. A "commit" is a saved change with a
 short note attached. A "workflow" is a job GitHub runs for you.
@@ -176,6 +197,12 @@ Anyone can open the site address. Nobody needs a GitHub account to view it.
   20 trading days after each of the ticker's past signals, next to what it did on an ordinary
   day, with a **Show each signal** list; on the Dashboard the holdings table gains a
   **Peak record (10d)** column for confirmed PEAK signals. Both describe the past only.
+- **Conditions** (the small gray chips on the Dashboard cards and in the **Conditions**
+  columns) say where a stock stands on the day shown: above or below its 200-day average, RSI
+  under 30 or over 70 lately, heavy volume lately, a strong or weak past year. The Dashboard's
+  **Highlight** menu and the Screener's condition filters and **Combination** menu pair them with
+  confirmed signals; in the site's ten-year test no combination did better than an ordinary day.
+  On the **Charts** tab the thin dashed line on the price panel is the 200-day average.
 - **Info** explains every term on the page in plain language. Start there if MACD and RSI are new
   to you.
 - **Holding details** (on the **My list** tab) adds your own numbers to the Dashboard. With
