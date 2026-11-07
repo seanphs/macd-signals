@@ -16,6 +16,19 @@ and a **Hide choppy** box that is on by default. The filters are remembered in y
 of the page, the Screener describes what the indicator did; it is not a list of things to buy
 or sell.
 
+**Holding details.** On the **My list** tab, under the list editor, a **Holding details** table
+lets you record, for each holding, how many shares you own, your average cost per share, the
+date you bought, a sell target and a trailing stop percentage. Every field is optional.
+**Save details** stores them, and the Dashboard then shows a portfolio row (value, day change,
+gain since cost, long-term positions), extra columns in the holdings table (**Value**,
+**Weight**, **Gain**, **Target**, **Stop**, **Held** and **vs SPY (1M)**) and a section called
+**Your targets and stops** that lists the holdings whose closing price is close to, or past, the
+numbers you entered. The targets and stops are your own numbers; the page only measures how far each price
+is from them, and it never suggests one. The details stay in your browser only: they are never
+put in the page address, so the **Copy link** button never carries them. The **Backup** box under
+the table is for moving them to another device: **Copy backup** copies them as a block of text,
+and **Restore from backup** reads that text back in on the other device.
+
 **This site is not financial advice.** It describes what an indicator is doing. It does not tell
 anyone what to buy or sell.
 
@@ -75,6 +88,7 @@ Details worth knowing:
 | `SETUP.md` | Step-by-step setup for the owner. |
 | `docs/SPEC.md` | The technical description the files were built to. |
 | `docs/SCREENER.md` | The same for the Screener tab and `screener.json`. |
+| `docs/HOLDINGS.md` | The same for the Holding details table and the portfolio columns it adds to the Dashboard. |
 
 A "repository" is GitHub's word for one project's folder. A "commit" is a saved change with a
 short note attached. A "workflow" is a job GitHub runs for you.
@@ -146,6 +160,16 @@ Anyone can open the site address. Nobody needs a GitHub account to view it.
   days to 1 year. Move the mouse over the chart to read the numbers for any day.
 - **Info** explains every term on the page in plain language. Start there if MACD and RSI are new
   to you.
+- **Holding details** (on the **My list** tab) adds your own numbers to the Dashboard. With
+  shares and cost entered, the holdings table gains **Value** (shares times the day's close),
+  **Weight** (that value as a share of all your holdings with shares) and **Gain** (the close
+  compared with what you paid). **Target** and **Stop** show how far the close is from the sell
+  target and the trailing stop you entered; a trailing stop is measured from the highest close
+  since your purchase date (or over the past year if no date is set). **Held** shows how long you
+  have held the position and marks it "long-term" after more than one year; what that means for
+  taxes depends on your situation, and the page does not give tax advice. **vs SPY (1M)** is the
+  one-month change minus SPY's one-month change, in percentage points. A column is only shown
+  when at least one holding has the number it needs.
 
 A signal is an observation about a chart pattern. It is not a prediction and not a
 recommendation.
@@ -200,7 +224,9 @@ website itself (for example to `universe.txt`) need nothing of the sort.
 - Your lists stay in your browser (and in the page address, if you use **Copy link**). The page
   sends nothing anywhere; it only reads data files from the site itself.
 - A link made with **Copy link** contains the tickers in the list. Share it only with people you
-  want to see them.
+  want to see them. Holding details (shares, cost, dates, targets and stops) are never part of
+  the link; they stay in your browser only, and the **Backup** box is the one way they leave it,
+  as text you copy yourself.
 - The repository is public, as GitHub Pages requires on the free plan. It contains the code, the
   ticker list and the nightly prices. It contains no names, account numbers, amounts or anything
   else personal.

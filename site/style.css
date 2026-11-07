@@ -77,6 +77,11 @@ button.primary { background: var(--accent); color: #fff; border-color: var(--acc
 .stat .value { font-size: 26px; font-weight: 600; line-height: 1.1; margin-top: 4px; }
 .stat .value .small { font-size: 18px; display: inline-block; margin-top: 8px; }
 .stat.peak .value { color: var(--peak-3); } .stat.valley .value { color: var(--valley-2); }
+/* portfolio stats: money amounts are long, so a smaller figure and a line of small text under it */
+.stat .value.money { font-size: 20px; margin-top: 6px; }
+.stat .value.money .small { font-size: 14px; margin-top: 0; font-weight: 500; }
+.stat .sub { margin-top: 4px; font-size: 12px; }
+.card .pos { font-size: 13px; color: var(--text-2); margin-top: 4px; }
 section { margin-bottom: 30px; }
 h2 { font-size: 16px; margin: 0 0 10px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
 h2 .note { font-weight: 400; font-size: 13px; color: var(--text-2); }
@@ -189,7 +194,7 @@ svg.chart .mark { stroke: var(--surface); stroke-width: 2; }
 .filters select:disabled { opacity: .5; cursor: default; }
 #screen-count { margin-bottom: 8px; }
 .up { color: var(--hist-pos); } .down { color: var(--hist-neg); }
-.badge.days { background: var(--valley-bg); color: var(--valley-3); font-weight: 500; }
+.badge.days, .badge.lt { background: var(--valley-bg); color: var(--valley-3); font-weight: 500; }
 .addwatch { font-size: 12px; padding: 3px 8px; white-space: nowrap; }
 /* list editor */
 .editor { max-width: 820px; }
@@ -204,6 +209,20 @@ svg.chart .mark { stroke: var(--surface); stroke-width: 2; }
 .editor .msg { margin-top: 10px; font-size: 14px; }
 .editor .msg.warn { color: var(--peak-3); }
 .editor .msg.ok { color: var(--text-2); }
+/* holding details (My list tab): a small table of inputs, then the backup box */
+#hold-sec { margin-top: 28px; }
+#hold-sec h2 { font-size: 16px; margin-bottom: 10px; }
+#hold-sec .hint { margin-top: 10px; }
+table.plain th { cursor: default; }
+#hold-table td { padding: 5px 6px; }
+#hold-table input { font: inherit; font-size: 14px; padding: 4px 8px; width: 110px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--surface); color: var(--text); }
+#hold-table input[type="date"] { width: 160px; }
+#hold-table input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.backup { margin-top: 24px; padding-top: 14px; border-top: 1px solid var(--border); }
+.backup h3 { font-size: 15px; margin: 0 0 6px; }
+.backup label { margin-top: 10px; }
+.backup textarea { text-transform: none; min-height: 90px; font-family: ui-monospace, Consolas, "Courier New", monospace; font-size: 13px; }
 /* info tab */
 .info { max-width: 820px; }
 .info h2 { display: block; font-size: 18px; margin: 26px 0 8px; }

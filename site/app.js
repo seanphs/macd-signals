@@ -1,8 +1,9 @@
 /* MACD Signals page.
    Plain JavaScript, no libraries. It reads data/index.json and one data/<TICKER>.json per ticker
    (both written by the nightly job), plus data/screener.json for the Screener tab, keeps the
-   viewer's lists in the page address and in this browser, and draws the dashboard, the screener,
-   the charts and the glossary.
+   viewer's lists in the page address and in this browser, keeps the viewer's optional holding
+   details (shares, cost, dates, targets) in this browser only, and draws the dashboard, the
+   screener, the charts and the glossary.
    Nothing here is advice: the page only describes what an indicator is doing. */
 'use strict';
 (function () {
@@ -34,6 +35,12 @@ const RSI_OPTS = {
 };
 const RSI_DEFAULT = {valley: 40, recover: 40, peak: 60, all: 0};
 const SCREEN_DEFAULTS = {show: 'valley', stage: 0, rsi: 40, within: 10, below: 0, group: 'all', choppy: true, notmine: false};
+// Holding details (localStorage "macd-holdings": shares, cost, purchase date, sell target and
+// trailing stop per holding; all optional, never in the page address). Field key and column label.
+const HOLD_FIELDS = [['shares', 'Shares'], ['cost', 'Avg cost'], ['date', 'Bought'], ['target', 'Sell target'], ['trail', 'Trailing stop %']];
+const NEAR_PCT = 3;                               // "Your targets and stops" lists holdings within this percent of a level
+const MONTH_BARS = 21;                            // trading days in "1M" (the vs SPY comparison)
+const LONG_TERM_DAYS = 366;                       // held this many calendar days or more = more than one year
 
 // ---- state ---------------------------------------------------------------
 const S = {
@@ -56,6 +63,9 @@ const S = {
   screenError: null,       // why screener.json could not be loaded
   screenLoading: false,
   screenF: Object.assign({}, SCREEN_DEFAULTS),   // the Screener's filter settings (remembered in localStorage)
+  holdDetails: {},         // ticker -> {shares, cost, date, target, trail} the viewer entered (validated; browser only)
+  holdMsgs: [],            // messages about the last "Save details" ([kind, text]); shown under the details table
+  backupMsgs: [],          // messages about the last "Restore from backup"
 };
 const SORT = {holdings: {col: 'off', asc: true}, watch: {col: 'default', asc: true}, screen: {col: 'default', asc: true}};
 
@@ -67,6 +77,17 @@ function isNum(v) { return typeof v === 'number' && isFinite(v); }
 function fmt(v, d) { return isNum(v) ? (v >= 0 ? '+' : '') + v.toFixed(d === undefined ? 3 : d) : '–'; }
 function fmtClose(v) { return isNum(v) ? v.toFixed(Math.abs(v) >= 1 ? 2 : 4) : '–'; }
 function fmtPct(v, d) { return isNum(v) ? v.toFixed(d === undefined ? 1 : d) + '%' : '–'; }
+// Money in the ticker's currency: USD as $1,234.56, anything else as 1,234.56 CAD. The result is
+// HTML-safe (the currency code comes from a data file, so it is escaped here).
+function fmtMoney(v, cur) {
+  if (!isNum(v)) return '–';
+  const n = Math.abs(v).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const sign = v < 0 ? '-' : '';
+  return cur === 'USD' ? `${sign}$${n}` : `${sign}${n} ${esc(cur)}`;
+}
+function fmtMoneySigned(v, cur) { return isNum(v) ? (v > 0 ? '+' : '') + fmtMoney(v, cur) : '–'; }
+function fmtPlain(v) { return isNum(v) ? String(+v.toFixed(4)) : ''; }  // a number as the viewer typed it, without trailing zeros
+function upDown(v) { return v > 0 ? 'up' : v < 0 ? 'down' : ''; }
 function rangeLabel() { return (RANGES.find(x => x[1] === S.rangeN) || [''])[0]; }
 function weakPct() { const p = S.index && S.index.params; return p && isNum(p.weak_pct) ? p.weak_pct : 0.25; }
 function hasOwn(o, k) { return !!o && Object.prototype.hasOwnProperty.call(o, k); }
@@ -156,6 +177,7 @@ function sameLists(a, b) { return a.h.join(',') === b.h.join(',') && a.w.join(',
 function fillEditor() {
   $('ed-h').value = S.lists.h.join(' ');
   $('ed-w').value = S.lists.w.join(' ');
+  renderHoldForm();  // the details table has one row per holding, so it follows the list
 }
 function applyLists(l, note, stay) {
   // stay: keep the current tab (the Screener's "Add to watch" uses this); otherwise go to the Dashboard.
@@ -173,27 +195,145 @@ function saveFromEditor() {
   const bad = h.bad.concat(w.bad);
   applyLists({h: h.ok, w: w.ok}, bad.length ? 'Ignored because it does not look like a ticker: ' + bad.join(', ') : '');
 }
-function copyLink(which) {
-  const url = location.href;
-  const done = ok => {
-    const el = $(which === 2 ? 'copied2' : 'copied');
-    el.textContent = ok ? 'Link copied' : 'Could not copy. Copy the address from the address bar instead.';
-    el.hidden = false;
-    clearTimeout(el._t);
-    el._t = setTimeout(() => { el.hidden = true; }, ok ? 2500 : 6000);
-  };
+// Put text on the clipboard and call done(true/false). The old execCommand way is the fallback
+// for browsers without the clipboard API (or when it refuses).
+function copyText(text, done) {
   const fallback = () => {
     try {
       const ta = document.createElement('textarea');
-      ta.value = url; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.left = '-1000px';
+      ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.left = '-1000px';
       document.body.appendChild(ta); ta.select();
       const ok = document.execCommand('copy');
       document.body.removeChild(ta);
       done(ok);
     } catch (e) { done(false); }
   };
-  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(() => done(true), fallback);
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => done(true), fallback);
   else fallback();
+}
+// Show a short confirmation next to a copy button, then hide it again.
+function flash(el, text, ms) {
+  el.textContent = text; el.hidden = false;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.hidden = true; }, ms);
+}
+function copyLink(which) {
+  copyText(location.href, ok => flash($(which === 2 ? 'copied2' : 'copied'),
+    ok ? 'Link copied' : 'Could not copy. Copy the address from the address bar instead.', ok ? 2500 : 6000));
+}
+
+// ---- holding details: shares, cost, dates, targets and stops -------------
+// Stored in localStorage "macd-holdings" as {TICKER: {shares, cost, date, target, trail}}. Every
+// field is optional. The details never go into the page address or the shareable link; the
+// Backup box on the My list tab is how they move between devices. Details for tickers that are
+// not on the holdings list are kept (the viewer may re-add the ticker) but never shown.
+function todayISO() { const t = new Date(); return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0'); }
+function isoDay(s) {  // a real calendar date written YYYY-MM-DD
+  if (typeof s !== 'string' || !/^\d{4}-\d\d-\d\d$/.test(s)) return false;
+  const t = Date.parse(s + 'T00:00:00Z');
+  return !isNaN(t) && new Date(t).toISOString().slice(0, 10) === s;
+}
+// A number from stored JSON or from an input ("1,234.5", "$12", "10 %"); NaN if it is not one.
+function toNum(v) {
+  if (typeof v === 'number') return v;
+  if (typeof v !== 'string') return NaN;
+  const s = v.replace(/[$,%\s]/g, '');
+  return /^[-+]?(\d+\.?\d*|\.\d+)$/.test(s) ? Number(s) : NaN;
+}
+// One ticker's details from anything (stored JSON, the form, a pasted backup): {d: the valid
+// fields, bad: a reason for each field that was ignored}. Empty means "not set", not an error.
+function cleanDetail(o) {
+  const d = {}, bad = [];
+  if (!o || typeof o !== 'object') return {d, bad};
+  const empty = v => v == null || (typeof v === 'string' && !v.trim());
+  const num = (k, test, why) => {
+    if (empty(o[k])) return;
+    const n = toNum(o[k]);
+    if (!isFinite(n)) bad.push(k + ' (not a number)'); else if (!test(n)) bad.push(k + ' (' + why + ')'); else d[k] = n;
+  };
+  num('shares', n => n >= 0, 'cannot be negative');
+  num('cost', n => n > 0, 'must be above 0');
+  num('target', n => n > 0, 'must be above 0');
+  num('trail', n => n > 0 && n <= 100, 'must be above 0 and at most 100');
+  if (!empty(o.date)) {
+    const s = String(o.date).trim();
+    if (!isoDay(s)) bad.push('date (not a date)'); else if (s > todayISO()) bad.push('date (in the future)'); else d.date = s;
+  }
+  return {d, bad};
+}
+// A whole holdings object: {details, notes, ok}. notes lists what was ignored, one line per
+// ticker ("Ignored for AAPL: cost (not a number)"); ok is false when it is not an object at all.
+function cleanHoldings(obj) {
+  const details = {}, notes = [];
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {details, notes, ok: false};
+  Object.keys(obj).forEach(k => {
+    const sym = norm(k);
+    if (!SYM_RE.test(sym)) { notes.push(`Ignored "${k}": it does not look like a ticker`); return; }
+    const {d, bad} = cleanDetail(obj[k]);
+    if (bad.length) notes.push(`Ignored for ${sym}: ${bad.join(', ')}`);
+    if (Object.keys(d).length) details[sym] = d;
+  });
+  return {details, notes, ok: true};
+}
+function readHoldings() { try { return cleanHoldings(JSON.parse(lsGet('macd-holdings') || 'null')).details; } catch (e) { return {}; } }
+function storeHoldings() { lsSet('macd-holdings', JSON.stringify(S.holdDetails)); }
+function detailOf(sym) { return hasOwn(S.holdDetails, sym) ? S.holdDetails[sym] : null; }
+// The "Holding details" table on the My list tab: one row per holding, in list order. It is
+// rebuilt only when the list changes or after a save, so typing in it is never wiped by a refresh.
+function renderHoldForm() {
+  const syms = S.lists.h;
+  $('hold-sec').hidden = !syms.length;
+  if (!syms.length) { $('hold-table').innerHTML = ''; return; }
+  const rows = syms.map(sym => {
+    const d = detailOf(sym) || {};
+    const cells = HOLD_FIELDS.map(([k, label]) => {
+      const v = k === 'date' ? (d.date || '') : fmtPlain(d[k]);
+      const type = k === 'date' ? `type="date" max="${todayISO()}"` : 'type="text" inputmode="decimal"';
+      return `<td><input ${type} class="hold-in" data-sym="${esc(sym)}" data-field="${k}" value="${esc(v)}" aria-label="${label} for ${esc(sym)}"></td>`;
+    }).join('');
+    return `<tr><td><b>${esc(sym)}</b></td>${cells}</tr>`;
+  }).join('');
+  $('hold-table').innerHTML = `<table class="plain"><thead><tr><th>Ticker</th>${HOLD_FIELDS.map(([, l]) => `<th>${l}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`;
+  renderHoldMsgs();
+  $('bk-out').value = JSON.stringify(S.holdDetails, null, 2);
+}
+function msgsHTML(msgs) { return msgs.map(([kind, text]) => `<div class="msg ${kind}">${esc(text)}</div>`).join(''); }
+function renderHoldMsgs() { $('hold-msgs').innerHTML = msgsHTML(S.holdMsgs); $('bk-msgs').innerHTML = msgsHTML(S.backupMsgs); }
+// "Save details": validate every input, keep what is valid, say what was ignored, redraw the Dashboard.
+function saveHoldForm() {
+  const raw = {};
+  document.querySelectorAll('#hold-table .hold-in').forEach(inp => { (raw[inp.dataset.sym] = raw[inp.dataset.sym] || {})[inp.dataset.field] = inp.value; });
+  const msgs = [];
+  let kept = 0;
+  Object.keys(raw).forEach(sym => {
+    const {d, bad} = cleanDetail(raw[sym]);
+    if (bad.length) msgs.push(['warn', `Ignored for ${sym}: ${bad.join(', ')}`]);
+    if (Object.keys(d).length) { S.holdDetails[sym] = d; kept++; } else delete S.holdDetails[sym];
+  });
+  storeHoldings();
+  msgs.push(['ok', kept ? `Details saved for ${kept} holding${kept === 1 ? '' : 's'}. They stay in this browser only.` : 'No details set.']);
+  S.holdMsgs = msgs; S.backupMsgs = [];
+  renderHoldForm();
+  render();
+}
+function copyBackup() {
+  copyText($('bk-out').value, ok => flash($('bk-copied'), ok ? 'Backup copied' : 'Could not copy. Select the text in the box and copy it yourself.', ok ? 2500 : 6000));
+}
+// "Restore from backup": the pasted JSON goes through the same validation; its tickers replace
+// the current details for those tickers, everything else stays.
+function restoreBackup() {
+  let j;
+  try { j = JSON.parse($('bk-in').value); } catch (e) { S.backupMsgs = [['warn', 'That is not a backup this page can read. Paste the whole text, from the first { to the last }.']]; renderHoldMsgs(); return; }
+  const {details, notes, ok} = cleanHoldings(j);
+  if (!ok) { S.backupMsgs = [['warn', 'That is not a backup made by this page.']]; renderHoldMsgs(); return; }
+  const syms = Object.keys(details);
+  syms.forEach(s => { S.holdDetails[s] = details[s]; });
+  if (syms.length) storeHoldings();
+  const msgs = notes.map(t => ['warn', t]);
+  msgs.push(['ok', syms.length ? `Restored details for ${syms.length} ticker${syms.length === 1 ? '' : 's'}: ${syms.join(', ')}.` : 'Nothing to restore: the backup has no valid details.']);
+  S.backupMsgs = msgs; S.holdMsgs = [];
+  renderHoldForm();
+  render();
 }
 
 // ---- data loading --------------------------------------------------------
@@ -241,7 +381,9 @@ async function refresh() {
   const token = ++S.loadToken;
   renderControls(); renderEditor(); renderFooter(); renderBanner();
   if (S.index) {
-    const need = knownListed().filter(s => !S.files[s]);
+    // SPY comes along whenever the data set has it: the holdings table compares each holding's
+    // one-month change with it. It is not a listed ticker unless the viewer lists it.
+    const need = knownListed().concat(known('SPY') ? ['SPY'] : []).filter(s => !S.files[s]);
     if (need.length) {
       setStatus(`Loading data for ${need.length} ticker${need.length > 1 ? 's' : ''}…`);
       $('dash-msg').hidden = true; $('dash-body').hidden = true;
@@ -290,6 +432,141 @@ function row(sym, day) {  // everything the page shows for one ticker on one day
   };
 }
 function hasDir(r, dir) { return r.sigs.some(s => s.dir === dir); }
+// ---- what the viewer's holding details add to a row ----------------------
+function chg1m(f, i) {  // close vs the close 21 bars earlier, percent; null if the file is too short
+  const k = i - MONTH_BARS;
+  return k >= 0 && isNum(f.close[i]) && isNum(f.close[k]) && f.close[k] > 0 ? (f.close[i] / f.close[k] - 1) * 100 : null;
+}
+function spyChg1m(day) { const f = S.files.SPY; if (!f) return null; const i = barIndex(f, day); return i < 0 ? null : chg1m(f, i); }
+// Everything the details for holding r add on the selected day. A field the viewer did not set
+// leaves its derived values null. weight is filled in by renderDash once every value is known.
+function position(r, day) {
+  const d = detailOf(r.sym) || {}, f = r.f, i = r.i, close = r.close;
+  const p = {any: Object.keys(d).length > 0, shares: d.shares, cost: d.cost, date: d.date, target: d.target, trail: d.trail,
+    currency: typeof f.currency === 'string' && f.currency ? f.currency : 'USD',
+    value: null, costTotal: null, gainPct: null, gainAbs: null, dayChg: null, prevValue: null, weight: null,
+    toTarget: null, stopRef: null, stopFrom: null, stopPrice: null, toStop: null, heldDays: null, longTerm: false, vsSpy1m: null};
+  const prev = i > 0 ? f.close[i - 1] : null;
+  if (isNum(d.shares)) {
+    p.value = d.shares * close;
+    if (isNum(prev)) { p.dayChg = (close - prev) * d.shares; p.prevValue = prev * d.shares; }
+    if (isNum(d.cost)) { p.costTotal = d.shares * d.cost; p.gainAbs = (close - d.cost) * d.shares; }
+  }
+  if (isNum(d.cost)) p.gainPct = (close / d.cost - 1) * 100;
+  if (isNum(d.target)) p.toTarget = (d.target / close - 1) * 100;  // positive = still below the target
+  if (d.date) {
+    const held = (Date.parse(day + 'T00:00:00Z') - Date.parse(d.date + 'T00:00:00Z')) / 86400000;
+    if (held >= 0) { p.heldDays = Math.round(held); p.longTerm = p.heldDays >= LONG_TERM_DAYS; }  // bought after this day: nothing to say
+  }
+  if (isNum(d.trail)) {
+    // The stop trails the highest close since the purchase date when that date is set and inside
+    // the file, otherwise since the start of the file, through the selected day.
+    let start = 0;
+    if (d.date && d.date >= f.dates[0]) while (start <= i && f.dates[start] < d.date) start++;
+    let ref = -Infinity;
+    for (let k = start; k <= i; k++) if (isNum(f.close[k]) && f.close[k] > ref) ref = f.close[k];
+    if (ref > 0) {
+      p.stopRef = ref; p.stopFrom = start > 0 ? d.date : null;
+      p.stopPrice = ref * (1 - d.trail / 100);
+      if (p.stopPrice > 0) p.toStop = (close / p.stopPrice - 1) * 100;  // positive = above the stop
+    }
+  }
+  // Compare both 1-month windows ending on the same bar: the holding's own bar (r.date), which
+  // is earlier than the selected day when its file is stale, rather than the selected day.
+  const mine = chg1m(f, i), spy = spyChg1m(r.date);
+  if (isNum(mine) && isNum(spy)) p.vsSpy1m = mine - spy;
+  return p;
+}
+function fmtHeld(from, to, days) {  // "1y 3m", "5m" or "12d" from one date to another
+  const a = from.split('-').map(Number), b = to.split('-').map(Number);
+  const months = (b[0] - a[0]) * 12 + (b[1] - a[1]) - (b[2] < a[2] ? 1 : 0);
+  if (months < 1) return days + 'd';
+  const y = Math.floor(months / 12), m = months % 12;
+  return (y ? y + 'y' : '') + (m ? (y ? ' ' : '') + m + 'm' : '');
+}
+function targetText(p) { return !isNum(p.toTarget) ? '–' : p.toTarget >= 0 ? `${fmt(p.toTarget, 1)}% below` : `${fmtPct(-p.toTarget)} above`; }
+function stopText(p) { return !isNum(p.toStop) ? '–' : p.toStop >= 0 ? `${fmtPct(p.toStop)} above` : '<span class="down">BELOW</span>'; }
+function stopTitle(p) {
+  return `Stop ${fmtMoney(p.stopPrice, p.currency)}: the highest close ${p.stopFrom ? 'since ' + esc(p.stopFrom) : 'in the data'} (${fmtClose(p.stopRef)}) minus ${fmtPlain(p.trail)}%`;
+}
+function signedCell(v, unit) { return isNum(v) ? `<span class="${upDown(v)}">${fmt(v, 1)}${unit}</span>` : '–'; }
+// The extra columns of the holdings table, each only when some holding has what it needs.
+function holdCols(hold) {
+  const any = k => hold.some(r => isNum(r.pos[k]));
+  const cols = [];
+  if (!hold.some(r => r.pos.any)) return cols;
+  if (any('value')) cols.push(['value', 'Value'], ['weight', 'Weight']);
+  if (any('gainPct')) cols.push(['gain', 'Gain']);
+  if (any('target')) cols.push(['target', 'Target']);
+  if (any('trail')) cols.push(['stop', 'Stop']);
+  if (hold.some(r => r.pos.date)) cols.push(['held', 'Held']);
+  cols.push(['spy', 'vs SPY (1M)']);
+  return cols;
+}
+function holdCell(r, k, day) {
+  const p = r.pos, cur = p.currency;
+  switch (k) {
+    case 'value': return `<td class="num">${fmtMoney(p.value, cur)}</td>`;
+    case 'weight': return `<td class="num">${fmtPct(p.weight)}</td>`;
+    case 'gain': return `<td class="num"${isNum(p.gainAbs) ? ` title="${fmtMoneySigned(p.gainAbs, cur)} on a cost of ${fmtMoney(p.costTotal, cur)}"` : ''}>${signedCell(p.gainPct, '%')}</td>`;
+    case 'target': return `<td class="num"${isNum(p.target) ? ` title="Your target: ${fmtMoney(p.target, cur)}"` : ''}>${targetText(p)}</td>`;
+    case 'stop': return `<td class="num"${isNum(p.stopPrice) ? ` title="${stopTitle(p)}"` : ''}>${stopText(p)}</td>`;
+    case 'held': return `<td${p.date ? ` title="Bought ${esc(p.date)}${isNum(p.heldDays) ? ', ' + p.heldDays + ' days ago' : ''}"` : ''}>${isNum(p.heldDays) ? fmtHeld(p.date, day, p.heldDays) + (p.longTerm ? ' <span class="badge lt">long-term</span>' : '') : '–'}</td>`;
+    case 'spy': return `<td class="num" title="This ticker's 1-month change minus SPY's, in percentage points">${signedCell(p.vsSpy1m, ' pts')}</td>`;
+  }
+  return '<td>–</td>';
+}
+// The line under a card's name: only the parts the viewer's details make possible.
+function posLine(r) {
+  const p = r.pos;
+  if (!p || !p.any) return '';
+  const parts = [];
+  if (isNum(p.value)) parts.push('Value ' + fmtMoney(p.value, p.currency));
+  if (isNum(p.weight)) parts.push(fmtPct(p.weight) + ' of portfolio');
+  if (isNum(p.gainPct)) parts.push(fmt(p.gainPct, 1) + '% since cost');
+  if (isNum(p.toTarget)) parts.push(p.toTarget >= 0 ? `${fmtPct(p.toTarget)} below your target` : `${fmtPct(-p.toTarget)} above your target`);
+  if (isNum(p.toStop)) parts.push(p.toStop >= 0 ? `${fmtPct(p.toStop)} above your stop` : 'below your stop');
+  return parts.length ? `<div class="pos">${parts.join(' · ')}</div>` : '';
+}
+// The portfolio stats row: sums over the holdings that have shares. '' when none has.
+function portfolioStats(hold) {
+  const withShares = hold.filter(r => isNum(r.pos.value));
+  if (!withShares.length) return '';
+  const cur = withShares[0].pos.currency, mixed = withShares.some(r => r.pos.currency !== cur);
+  const sum = (rows, k) => rows.reduce((s, r) => s + r.pos[k], 0);
+  const value = sum(withShares, 'value');
+  const dayRows = withShares.filter(r => isNum(r.pos.dayChg)), dayChg = sum(dayRows, 'dayChg'), prevValue = sum(dayRows, 'prevValue');
+  const gainRows = withShares.filter(r => isNum(r.pos.gainAbs)), gainAbs = sum(gainRows, 'gainAbs'), costTotal = sum(gainRows, 'costTotal');
+  const dated = hold.filter(r => r.pos.date), longTerm = dated.filter(r => r.pos.longTerm).length;
+  const money = (v, pct) => `<span class="${upDown(v)}">${fmtMoneySigned(v, cur)}</span> <span class="small">${isNum(pct) ? fmt(pct, 1) + '%' : ''}</span>`;
+  const items = [
+    ['Portfolio value', fmtMoney(value, cur), `${withShares.length} of ${hold.length} holding${hold.length === 1 ? '' : 's'} have shares${mixed ? '; mixed currencies added as plain numbers' : ''}`],
+    ['Day change', dayRows.length ? money(dayChg, prevValue > 0 ? dayChg / prevValue * 100 : null) : '–', 'vs the previous trading day'],
+    ['Gain / loss since cost', gainRows.length ? money(gainAbs, costTotal > 0 ? gainAbs / costTotal * 100 : null) : '–', gainRows.length ? `${gainRows.length} of ${withShares.length} with a cost; close vs what you paid` : 'no average cost entered'],
+  ];
+  if (dated.length) items.push(['Long-term positions', String(longTerm), `of ${dated.length} with a purchase date; held more than one year`]);
+  return items.map(([l, v, s]) => `<div class="stat"><div class="label">${l}</div><div class="value money">${v}</div><div class="sub">${s}</div></div>`).join('');
+}
+// Chips for "Your targets and stops": holdings at or past a level, or within NEAR_PCT of it.
+function targetChips(hold) {
+  const chips = [];
+  const chip = (r, text) => {
+    const peak = topSignal(r.sigs, 'PEAK');
+    chips.push(`<div class="chip"><b>${symlink(r.sym)}</b>${staleBadge(r)} <span>${text}</span>${peak ? ' ' + badge(peak) : ''}</div>`);
+  };
+  hold.forEach(r => {
+    const p = r.pos;
+    if (isNum(p.toTarget) && p.toTarget <= NEAR_PCT) {
+      const t = fmtMoney(p.target, p.currency);
+      chip(r, p.toTarget > 0 ? `closed ${fmtPct(p.toTarget)} below your target of ${t}` : `closed above your target of ${t} (by ${fmtPct(-p.toTarget)})`);
+    }
+    if (isNum(p.toStop) && p.toStop <= NEAR_PCT) {
+      const s = `its ${fmtPlain(p.trail)}% trailing stop (${fmtMoney(p.stopPrice, p.currency)})`;
+      chip(r, p.toStop >= 0 ? `closed ${fmtPct(p.toStop)} above ${s}` : `closed below ${s}`);
+    }
+  });
+  return chips;
+}
 function rank(r) {  // peaks first, then valleys, then higher stage, then closeness to the high
   const p = topSignal(r.sigs, 'PEAK'), v = topSignal(r.sigs, 'VALLEY');
   if (p) return [0, -p.stage, r.pct];
@@ -352,7 +629,7 @@ function card(r, dir) {
   const detail = mine.map(s => s.detail).filter(Boolean).join('; ');
   return `<div class="card ${dir.toLowerCase()} s${top.stage}">
     <div class="card-head">${symlink(r.sym, true)}${badges.join('')}${staleBadge(r)}<span class="price">close ${fmtClose(r.close)}</span></div>
-    <div class="name">${esc(r.name)}</div>
+    <div class="name">${esc(r.name)}</div>${posLine(r)}
     <div class="stepper">${steps}</div>
     <div class="metrics">
       <div class="metric"><div class="label"><span>RSI (14)</span><b>${isNum(r.rsi) ? r.rsi.toFixed(0) : '–'}</b></div>${meter(r.rsi, rsiClass(r.rsi), [30, 70])}</div>
@@ -368,11 +645,17 @@ function cmpVal(x, y) {
 }
 function sortRows(rows, key, days) {
   const s = SORT[key];
-  const val = r => ({
+  const val = r => { const p = r.pos || {}; return ({
     symbol: r.sym, name: r.name.toLowerCase(), today: rank(r), rsi: r.rsi, off: r.pct,
     macd: (r.hist >= 0 ? 0 : 2) + (r.trend === 'rising' ? 0 : 1), hist: r.hist, close: r.close,
-    recent: recentCount(r, days), default: rank(r)})[s.col];
-  rows.sort((a, b) => (s.asc ? 1 : -1) * cmpVal(val(a), val(b)) || a.sym.localeCompare(b.sym));
+    recent: recentCount(r, days), default: rank(r),
+    // the holding-details columns; a missing value ("–") sorts last whichever way the column goes
+    value: p.value, weight: p.weight, gain: p.gainPct, target: p.toTarget, stop: p.toStop, held: p.heldDays, spy: p.vsSpy1m})[s.col]; };
+  rows.sort((a, b) => {
+    const x = val(a), y = val(b);
+    if ((x == null) !== (y == null)) return x == null ? 1 : -1;
+    return (s.asc ? 1 : -1) * cmpVal(x, y) || a.sym.localeCompare(b.sym);
+  });
   return rows;
 }
 // Table header cells for a sortable table: cols is [[column key, label], ...], key names the SORT entry.
@@ -383,10 +666,12 @@ function sortHeaders(cols, key) {
 }
 function rsiCell(r) { return `<td class="num">${isNum(r.rsi) ? r.rsi.toFixed(0) : '–'}<span class="bar"><i class="${rsiClass(r.rsi)}" style="width:${isNum(r.rsi) ? r.rsi.toFixed(1) : 0}%"></i></span></td>`; }
 function pctCell(r) { return `<td class="num">${fmtPct(r.pct)}<span class="bar"><i style="width:${Math.max(0, 100 - r.pct).toFixed(1)}%"></i></span></td>`; }
-function tableHTML(rows, key, days) {
+function tableHTML(rows, key, days, extra) {
+  // extra: the holding-details columns (holdCols), placed after "% below 1-yr high"; none for the watch table.
+  extra = extra || [];
   const cols = [
     ['symbol', 'Ticker'], ['name', 'Name'], ['today', 'Signal'], ['macd', 'MACD vs signal'], ['hist', `Histogram (${rangeLabel()})`],
-    ['close', 'Close'], ['rsi', 'RSI'], ['off', '% below 1-yr high'], ['recent', `Recent (${rangeLabel()})`]];
+    ['close', 'Close'], ['rsi', 'RSI'], ['off', '% below 1-yr high']].concat(extra, [['recent', `Recent (${rangeLabel()})`]]);
   const ths = sortHeaders(cols, key);
   const body = rows.map(r => {
     const t = r.sigs.length ? r.sigs.map(badge).join(' ') : '<span class="sub">–</span>';
@@ -400,6 +685,7 @@ function tableHTML(rows, key, days) {
       <td class="num">${fmtClose(r.close)}</td>
       ${rsiCell(r)}
       ${pctCell(r)}
+      ${extra.map(([k]) => holdCell(r, k, S.day)).join('')}
       <td>${strip(d => eventsOn(r.f, d), days, S.rangeN)}</td>
     </tr>`;
   }).join('');
@@ -425,9 +711,16 @@ function renderDash() {
   const rows = loadedListed().map(s => row(s, day)).filter(Boolean);
   const hold = rows.filter(r => r.group === 'holdings'), watch = rows.filter(r => r.group !== 'holdings');
   $('rangenote').textContent = rangeLabel();
+  // The viewer's holding details (shares, cost, ...) and what they add; weight needs the total first.
+  hold.forEach(r => { r.pos = position(r, day); });
+  const total = hold.reduce((s, r) => s + (isNum(r.pos.value) ? r.pos.value : 0), 0);
+  hold.forEach(r => { if (isNum(r.pos.value) && total > 0) r.pos.weight = r.pos.value / total * 100; });
+  const anyShares = hold.some(r => isNum(r.pos.value));
 
-  // Card order: strongest stage first, then not choppy, then larger |MACD| as a percent of price.
-  const byStrength = dir => (a, b) => topSignal(b.sigs, dir).stage - topSignal(a.sigs, dir).stage || (a.weak ? 1 : 0) - (b.weak ? 1 : 0) || b.pctOfPrice - a.pctOfPrice;
+  // Card order: strongest stage first, then (when any holding has shares) larger position value,
+  // then not choppy, then larger |MACD| as a percent of price.
+  const valueOf = r => isNum(r.pos.value) ? r.pos.value : -1;
+  const byStrength = dir => (a, b) => topSignal(b.sigs, dir).stage - topSignal(a.sigs, dir).stage || (anyShares ? valueOf(b) - valueOf(a) : 0) || (a.weak ? 1 : 0) - (b.weak ? 1 : 0) || b.pctOfPrice - a.pctOfPrice;
   const peaks = hold.filter(r => hasDir(r, 'PEAK')).sort(byStrength('PEAK'));
   const valleys = hold.filter(r => hasDir(r, 'VALLEY') && !hasDir(r, 'PEAK')).sort(byStrength('VALLEY'));
   // Choppy tickers (money-market and short Treasury funds) sit at their high with a flat MACD; not a "near high" worth a chip.
@@ -440,13 +733,23 @@ function renderDash() {
     ['Watch tickers with signals', whits.length, ''],
     ['Data as of', `<span class="small">${esc(day)}</span>`, ''],
   ].map(([l, v, c]) => `<div class="stat ${c}"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('');
+  // Portfolio stats (only when some holding has shares) and the targets/stops section (only when
+  // some holding has a target or a trailing stop); both come from the viewer's own details.
+  const pstats = portfolioStats(hold);
+  $('pstats').innerHTML = pstats; $('pstats').hidden = !pstats;
+  const anyLevel = hold.some(r => isNum(r.pos.target) || isNum(r.pos.trail));
+  $('targets-sec').hidden = !anyLevel;
+  if (anyLevel) {
+    const chips = targetChips(hold);
+    $('targets').innerHTML = chips.length ? `<div class="chips">${chips.join('')}</div>` : '<div class="empty">None close on this day.</div>';
+  }
 
   $('peaks').innerHTML = peaks.length ? `<div class="cards">${peaks.map(r => card(r, 'PEAK')).join('')}</div>` : '<div class="empty">No new PEAK signals on your holdings on this day.</div>';
   $('nearhigh').innerHTML = near.length ? `<div class="chips">${near.map(r =>
     `<div class="chip"><b>${symlink(r.sym)}</b>${staleBadge(r)} <span>RSI ${isNum(r.rsi) ? r.rsi.toFixed(0) : '–'}, ${fmtPct(r.pct)} off high, histogram ${r.trend}</span></div>`).join('')}</div>`
     : '<div class="empty">None on this day.</div>';
   $('valleys').innerHTML = valleys.length ? `<div class="cards">${valleys.map(r => card(r, 'VALLEY')).join('')}</div>` : '<div class="empty">No new VALLEY signals on your holdings on this day.</div>';
-  $('holdings').innerHTML = hold.length ? tableHTML(sortRows(hold.slice(), 'holdings', days), 'holdings', days) : '<div class="empty">No holdings with data. Add some on the My list tab.</div>';
+  $('holdings').innerHTML = hold.length ? tableHTML(sortRows(hold.slice(), 'holdings', days), 'holdings', days, holdCols(hold)) : '<div class="empty">No holdings with data. Add some on the My list tab.</div>';
   const wrows = $('allwatch').checked ? watch.slice() : whits.slice();
   $('watch').innerHTML = wrows.length ? tableHTML(sortRows(wrows, 'watch', days), 'watch', days)
     : (watch.length ? '<div class="empty">No watchlist signals on this day.</div>' : '<div class="empty">No watch tickers with data.</div>');
@@ -888,7 +1191,7 @@ document.addEventListener('click', e => {
   if (th) {
     const s = SORT[th.dataset.key];
     // Numeric "more is more interesting" columns start descending, the rest ascending.
-    if (s.col === th.dataset.col) s.asc = !s.asc; else { s.col = th.dataset.col; s.asc = !['rsi', 'close', 'recent', 'signal', 'chg1', 'chg3'].includes(th.dataset.col); }
+    if (s.col === th.dataset.col) s.asc = !s.asc; else { s.col = th.dataset.col; s.asc = !['rsi', 'close', 'recent', 'signal', 'chg1', 'chg3', 'value', 'weight', 'gain', 'held', 'spy'].includes(th.dataset.col); }
     render();
   }
 });
@@ -905,6 +1208,10 @@ $('save').addEventListener('click', saveFromEditor);
 $('example').addEventListener('click', () => applyLists(EXAMPLE, ''));
 $('example2').addEventListener('click', () => applyLists(EXAMPLE, ''));
 ['ed-h', 'ed-w'].forEach(id => $(id).addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveFromEditor(); } }));
+$('hold-save').addEventListener('click', saveHoldForm);
+$('hold-table').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && e.target.closest('.hold-in')) { e.preventDefault(); saveHoldForm(); } });
+$('bk-copy').addEventListener('click', copyBackup);
+$('bk-restore').addEventListener('click', restoreBackup);
 let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if (S.tab === 'chart') renderChart(); }, 150); });
 window.addEventListener('hashchange', () => {
   const l = readHash();
@@ -922,6 +1229,7 @@ async function init() {
   const t = lsGet('macd-theme'); if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
   const r = +lsGet('macd-range'); if (RANGES.some(x => x[1] === r)) S.rangeN = r;
   S.screenF = readStoredScreen();
+  S.holdDetails = readHoldings();
   initLists();
   fillEditor();
   writeHash();  // the address bar always holds the shareable link

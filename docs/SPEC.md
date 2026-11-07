@@ -31,6 +31,7 @@ SETUP.md                       step-by-step: account, repo, upload, Pages source
 .gitignore                     site/data/, __pycache__/
 docs/SPEC.md                   this file
 docs/SCREENER.md               addendum: the Screener tab and screener.json (2026-11-06)
+docs/HOLDINGS.md               addendum: Holding details on My list and the Dashboard (2026-11-06)
 ```
 
 Paths in the page are relative (`data/index.json`), because GitHub Pages serves a project site
@@ -177,6 +178,11 @@ make_dashboard.py (`prefers-color-scheme` plus an optional `data-theme` override
 - First visit (no lists anywhere): the page opens on the list editor with a two-sentence
   explanation and a "Load an example list" button (a dozen well-known tickers) so a visitor sees
   the dashboard immediately.
+- A third store, `localStorage` key `macd-holdings`: the viewer's optional per-holding details
+  (shares, average cost per share, purchase date, sell target, trailing stop %), a JSON object
+  keyed by ticker. Browser-only: it is never written into the URL hash and "Copy link" never
+  carries it; the only way out is the "Backup" box on the My list tab. Shape, validation and
+  the backup/restore rules are in `docs/HOLDINGS.md`.
 
 ### List editor
 
@@ -189,6 +195,13 @@ make_dashboard.py (`prefers-color-scheme` plus an optional `data-theme` override
   skipped everywhere else.
 - Stale tickers (file older than `last_bar`) show a small "data from <date>" badge wherever the
   ticker appears.
+- Below the list editor, a "Holding details" block, shown only when the saved holdings list is
+  non-empty: one row per holding, in list order, with inputs Shares, Avg cost, Bought (a date),
+  Sell target and Trailing stop %, every field optional; a "Save details" button (Ctrl+Enter in
+  any input also saves) that validates, stores to `macd-holdings`, reports what it ignored in
+  the editor's `.msg warn` style and re-renders the Dashboard; under the table a "Backup" box
+  (read-only textarea with the stored JSON, a "Copy backup" button, and a paste textarea with a
+  "Restore from backup" button). Fields, validation and wording are in `docs/HOLDINGS.md`.
 
 ### Data loading
 
@@ -239,6 +252,18 @@ Sections, in this order, all for the selected day:
    range (newest on the right), cells with P1..P3 / V1..V3 codes coloured by stage, hover for the
    detail. Horizontally scrollable.
 
+Holding details additions, present only when at least one holding has at least one detail
+saved (everything about them, including the arithmetic, is in `docs/HOLDINGS.md`): a portfolio
+stats row under the stats row (portfolio value, day change, gain since cost, long-term
+positions); in the "All holdings" table, after "% below 1-yr high", the sortable columns Value,
+Weight, Gain, Target, Stop, Held and "vs SPY (1M)", each shown only when some holding has the
+field it needs; a value line under the name on the PEAK and VALLEY cards, with cards ordered by
+value after stage; and a section "Your targets and stops" between "Near highs, no turn yet" and
+"Holdings: VALLEY signals" listing holdings that closed at, past, or within 3% of their own
+target or trailing stop. SPY's file is loaded whenever it is in the data set, for the
+"vs SPY (1M)" column, without being shown as a watch ticker. The page measures distance to the
+viewer's own numbers and never suggests a target, a stop, or an action.
+
 ### Screener tab
 
 Between Dashboard and Charts (tab order: Dashboard, Screener, Charts, Info, My list). Every
@@ -265,7 +290,10 @@ Port the glossary of make_dashboard.py (The basics, Moving averages and MACD, Th
 other numbers, Reading the charts, Things to keep in mind), adjusted for this page: the history
 is a full year from the first visit rather than filling in day by day; add a short "About this
 site" section: data from Yahoo Finance fetched once a night by a free GitHub job, computed as of
-the last completed trading day, your list stays in your browser, not financial advice.
+the last completed trading day, your list stays in your browser, not financial advice. The
+Screener's glossary entries are in `docs/SCREENER.md` and the Holding details entries (Holding
+details, Value / Weight / Gain since cost, Sell target, Trailing stop, Held / long-term,
+vs SPY (1M)) in `docs/HOLDINGS.md`.
 
 ### Footer
 
@@ -312,7 +340,7 @@ It is not financial advice."
 Written for a non-developer who owns the repo. README: what the site is, how the nightly job
 works, how to add tickers (edit `universe.txt` in the GitHub web editor, commit, optionally run
 the workflow by hand; the ticker goes under `## Added by the owner`), how to share the site, how
-to read the page (short, including a Screener paragraph; the Info tab has the rest), troubleshooting (Actions tab shows red: open the run, read the summary line; Yahoo
+to read the page (short, including a Screener paragraph and a Holding details paragraph; the Info tab has the rest), troubleshooting (Actions tab shows red: open the run, read the summary line; Yahoo
 blocked; schedule disabled after inactivity; page shows old data: hard refresh), privacy (lists
 stay in viewers' browsers; the share link contains the list; the repo is public but contains no
 personal data), not financial advice. SETUP: numbered steps with the exact labels of GitHub's

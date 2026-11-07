@@ -45,6 +45,7 @@
 <div id="dash-msg" hidden></div>
 <div id="dash-body" hidden>
 <div class="stats" id="stats"></div>
+<div class="stats" id="pstats" hidden></div>
 
 <section>
   <h2>Holdings: PEAK signals <span class="note">new on the selected day, strongest stage first</span></h2>
@@ -54,6 +55,11 @@
 <section>
   <h2>Near highs, no turn yet <span class="note">holdings within 2% of their 1-year high with RSI 65 or more, no signal and not choppy</span></h2>
   <div id="nearhigh"></div>
+</section>
+
+<section id="targets-sec" hidden>
+  <h2>Your targets and stops <span class="note">holdings that closed at or above your sell target or within 3% below it, or at or below your trailing stop or within 3% above it; your own numbers, measured, not a recommendation</span></h2>
+  <div id="targets"></div>
 </section>
 
 <section>
@@ -200,6 +206,12 @@
 <dt>Last crossover</dt><dd>The most recent confirmed crossover (stage 3) in either direction and how many trading days ago it happened; 0 means it was on the latest day.</dd>
 <dt>1M / 3M change</dt><dd>The close compared with the close 21 / 63 trading days earlier (about one and three months), in percent.</dd>
 <dt>Group</dt><dd>Where the ticker sits in the site's list: Indexes, S&amp;P 500, Nasdaq-100, ETFs, Other stocks or Added by the owner. A company in both the S&amp;P 500 and the Nasdaq-100 is listed once, under S&amp;P 500.</dd>
+<dt>Holding details</dt><dd>On the My list tab you can enter, for each holding, how many shares you own, your average cost per share, the date you bought, a sell target and a trailing stop percentage. Every box is optional. The details are kept in this browser only: they are never sent anywhere and the shareable link never carries them. The Backup box on that tab is how you move them to another device.</dd>
+<dt>Value / Weight / Gain since cost</dt><dd>Value is shares times the close on the selected day; Weight is that value as a share of the total value of your holdings with shares; Gain since cost is how far the close is from your average cost, in percent (and in money when shares are entered); a negative number is a loss. The Day change stat is the change in value from the previous trading day's close.</dd>
+<dt>Sell target</dt><dd>A price you chose. The page shows how far the close is from it ("4.2% below", "2.1% above") and lists holdings that closed at or above it or within 3% below it under "Your targets and stops". The number is yours; the page does not suggest one.</dd>
+<dt>Trailing stop</dt><dd>A percentage you chose. The stop price is the highest close since your purchase date (or over the past year of data when no date is entered, or the date is before the data starts) minus that percentage; it moves up with new highs and never down. The page shows how far the close is above it, or BELOW when the close is under it. It only measures; it does not place orders or suggest a percentage.</dd>
+<dt>Held / long-term</dt><dd>How long you have held the shares, from your purchase date to the selected day. "Long-term" marks a holding kept more than one year (a year and a day or more). Tax rules depend on your own situation and country; the page does not give tax advice.</dd>
+<dt>vs SPY (1M)</dt><dd>This ticker's change over the last 21 trading days minus SPY's change over the same days, in percentage points. SPY is a fund that tracks the S&amp;P 500, so this is "did it do better or worse than the broad U.S. market this month". It shows a dash when SPY's data is not available.</dd>
 </dl>
 
 <h2>Reading the charts</h2>
@@ -207,11 +219,11 @@
 <div class="ex">A typical peak sequence on the chart: the green histogram bars get shorter (early warning), the blue MACD line flattens and tips over (MACD turned), then the blue line drops through the orange line and the bars turn red (CONFIRMED).</div>
 
 <h2>Things to keep in mind</h2>
-<p>MACD is built from averages, so it lags. By the time a crossover is confirmed, part of the move has already happened. It also gives plenty of false alarms in sideways markets. Treat these signals as a prompt to look, not as a verdict. A valley signal on a stock in a long decline is common on the way down; the "% below 1-yr high" column shows how far it has fallen, not whether it has stopped. Prices come from Yahoo Finance and can occasionally be late or missing; the footer shows how many tickers failed or were kept from the previous night. Nothing here is financial advice.</p>
+<p>MACD is built from averages, so it lags. By the time a crossover is confirmed, part of the move has already happened. It also gives plenty of false alarms in sideways markets. Treat these signals as a prompt to look, not as a verdict. A valley signal on a stock in a long decline is common on the way down; the "% below 1-yr high" column shows how far it has fallen, not whether it has stopped. The distance to a sell target or a trailing stop is arithmetic on a number you typed in, not a forecast of where the price is going. Prices come from Yahoo Finance and can occasionally be late or missing; the footer shows how many tickers failed or were kept from the previous night. Nothing here is financial advice.</p>
 
 <h2>About this site</h2>
 <p>The prices come from Yahoo Finance and are downloaded once a night by a free, automated GitHub job; everything is computed as of the last completed trading day. <span id="params-note"></span></p>
-<p>Your list of tickers stays in your browser and in the page address. It is never sent anywhere. Share the page address and the other person sees the same list.</p>
+<p>Your list of tickers stays in your browser and in the page address. It is never sent anywhere. Share the page address and the other person sees the same list. Your holding details (shares, cost, dates, targets) stay in your browser only and are not in the address.</p>
 <p>Nothing on this page is financial advice. It only describes what an indicator is doing.</p>
 </div>
 </div>
@@ -241,6 +253,33 @@
   </div>
   <div class="hint">Your list is saved in this browser and in the page address. Nothing is sent anywhere.</div>
   <div id="ed-msgs"></div>
+</div>
+
+<div class="editor" id="hold-sec" hidden>
+  <h2>Holding details <span class="note">optional: shares, average cost, purchase date and the price levels you personally care about, per holding. Every box can be left empty.</span></h2>
+  <div class="scroll" id="hold-table"></div>
+  <div class="actions">
+    <button id="hold-save" class="primary">Save details</button>
+    <span class="sub">or press Ctrl+Enter in any box</span>
+  </div>
+  <div id="hold-msgs"></div>
+  <div class="hint">Targets and stops are your own numbers; the page only measures how far each price is from them.</div>
+  <div class="backup">
+    <h3>Backup</h3>
+    <p class="hint">Your details stay in this browser. To move them to another device, copy this backup there and restore it; the shareable link never contains them.</p>
+    <label for="bk-out">Your current details</label>
+    <textarea id="bk-out" readonly spellcheck="false"></textarea>
+    <div class="actions">
+      <button id="bk-copy">Copy backup</button>
+      <span class="sub" id="bk-copied" hidden></span>
+    </div>
+    <label for="bk-in">Paste a backup here</label>
+    <textarea id="bk-in" spellcheck="false" placeholder='{"AAPL": {"shares": 120, "cost": 182.5}}'></textarea>
+    <div class="actions">
+      <button id="bk-restore">Restore from backup</button>
+    </div>
+    <div id="bk-msgs"></div>
+  </div>
 </div>
 </div>
 
