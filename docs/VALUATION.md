@@ -79,8 +79,62 @@ hover text gives the exact value and its date, or why there is none.
 - **Info**: entries **P/E (price / earnings)** and **PEG** in "The other numbers" (what they are,
   the rule of thumb that under 1 reads as cheap for the growth and over 2 as expensive, why the
   growth forecast and other sites' numbers make it unreliable, `n/m`, latest value only, not a
-  signal), a sentence in "Things to keep in mind", and a sentence in "About this site".
+  signal), an entry **P/E and PEG: tested** with the test below and its signal table, a sentence
+  in "Things to keep in mind", and a sentence in "About this site". The PEG filter's hover text
+  ends with the test's result.
 - Footer: "Prices, P/E and PEG from Yahoo Finance, updated nightly."
+
+## The test (2026-11-18): do P/E or PEG tell when to buy or sell?
+
+Asked by the owner after the columns were added. Short answer: no, not in the data available.
+
+**Data.** Yahoo keeps only five quarter-end values of the Statistics-page series (`EQMJM_3M` for
+P/E, `EQLXT_3M` for PEG; mostly 2025-09-30 to 2026-09-30), so the test covers about one year.
+Universe: the 503 `S&P 500` tickers of universe.txt (498 with two years of daily prices, 428 with
+PEG history), plus SPY; Yahoo's adjusted closes. Point in time: a quarter-end value is used only
+from 50 calendar days after its date, when the quarter's earnings would have been reported.
+Survivorship bias: today's members only.
+
+**Valuation alone.** On the first trading day of each month (Dec 2025 to Oct 2026), the stocks
+with a positive value were split into fifths by PEG, and separately by P/E; each stock's return
+over the next 21 or 63 trading days was compared with the average of all stocks that day.
+
+| | Lowest fifth ahead of highest | Mean gap (points) | Gap month by month |
+|---|---|---|---|
+| PEG, next 21 days | 5 of 11 months | -0.23 | +1.0 -0.8 +1.6 +1.8 -2.6 -2.1 -0.8 +2.4 +1.9 -3.2 -1.6 |
+| PEG, next 63 days | 5 of 9 | -0.43 | +1.1 +1.6 +3.1 -3.3 -6.5 -1.2 +1.9 +1.1 -1.7 |
+| P/E, next 21 days | 7 of 11 | +1.24 | +2.2 +4.4 -1.1 +3.0 -6.5 -4.7 +1.3 +7.4 +2.5 -8.1 +13.2 |
+| P/E, next 63 days | 6 of 9 | +1.32 | +4.2 +6.1 -2.2 -8.8 -8.0 +3.0 +8.9 +3.7 +5.0 |
+
+The P/E gap (t about 0.7 over the 11 months) is well within luck. The rule-of-thumb PEG groups
+over 63 days, against the average stock: under 1 -0.34, 1 to 2 -1.01, over 2 -1.53 (medians
+-2.02, -2.38, -3.25), in the expected order but not consistent month by month (above).
+
+**With MACD signals.** Every confirmed (stage 3) signal from 2025-05 to 2026-10 whose stock had a
+known value that day (8,284 signals), with the same measure as `docs/COMBOS.md`: the stock's
+return over the next 20 trading days minus SPY's, minus the mean of that measure over every
+stock-day of the same month. 95% ranges by resampling calendar weeks (signals on the same days
+move together). Hoped-for direction: above zero for valleys, below zero for peaks.
+
+| Combination | Signals | Average | 95% range | Before May 2026 | From May 2026 |
+|---|---|---|---|---|---|
+| Confirmed valley alone | 4,209 | -0.24 | -0.86 to +0.45 | -0.02 | -0.44 |
+| Valley + PEG under 1 | 1,117 | -0.37 | -1.17 to +0.43 | +0.04 | -0.78 |
+| Valley + PEG 1 to 2 | 934 | +0.06 | -0.89 to +0.94 | +0.33 | -0.15 |
+| Valley + PEG over 2 | 2,051 | -0.58 | -1.32 to +0.26 | -1.04 | -0.14 |
+| Valley + P/E in the cheapest fifth | 795 | +0.06 | -1.15 to +1.34 | +0.10 | +0.03 |
+| Valley + P/E in the priciest fifth | 826 | -0.64 | -1.98 to +0.74 | +1.23 | -2.33 |
+| Confirmed peak alone | 4,075 | -0.39 | -1.17 to +0.38 | -0.21 | -0.57 |
+| Peak + PEG over 2 | 1,996 | -0.67 | -1.49 to +0.11 | -0.96 | -0.38 |
+| Peak + PEG 1 to 2 | 888 | -0.31 | -1.15 to +0.57 | -0.17 | -0.42 |
+| Peak + PEG under 1 | 1,083 | -0.34 | -1.21 to +0.50 | -0.01 | -0.67 |
+| Peak + P/E in the priciest fifth | 814 | -0.66 | -2.54 to +1.07 | +1.06 | -2.17 |
+| Peak + P/E in the cheapest fifth | 769 | -0.30 | -1.33 to +0.67 | -0.40 | -0.21 |
+
+Every range includes zero. "Peak + PEG over 2" came closest and kept its sign in both halves,
+but it is barely different from the confirmed peak alone, and among a dozen combinations one that
+close is what chance gives. The Info tab shows eight of these rows. A longer test needs P/E and
+PEG history Yahoo does not keep; until then the page says what this one found.
 
 ## Verification done (2026-11-18)
 

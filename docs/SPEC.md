@@ -364,7 +364,8 @@ the last completed trading day, your list stays in your browser, not financial a
 Screener's glossary entries are in `docs/SCREENER.md`, the Holding details entries (Holding
 details, Value / Weight / Gain since cost, Sell target, Trailing stop, Held / long-term,
 vs SPY (1M)) in `docs/HOLDINGS.md`, the Conditions and Highlight and combinations entries
-(with the test table) in `docs/COMBOS.md`, and the P/E and PEG entries in `docs/VALUATION.md`.
+(with the test table) in `docs/COMBOS.md`, and the P/E and PEG entries (with their test
+table) in `docs/VALUATION.md`.
 
 ### Footer
 

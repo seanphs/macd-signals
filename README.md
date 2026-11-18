@@ -70,6 +70,9 @@ P/E of 10 with 10% growth. They are the latest values only, not one per day, so 
 does not change them. Funds, indexes and companies without earnings have none. The growth figure is
 a forecast and is often wrong. Sites also compute PEG in different ways, so another site's number,
 or even another Yahoo number, can be far off this one. These are valuation numbers, not signals.
+The site's owner tested them on the one year of S&P 500 data Yahoo keeps: neither P/E nor PEG,
+alone or combined with a MACD signal, predicted what a stock did next better than an ordinary
+day did. The Info tab has the numbers.
 
 **This site is not financial advice.** It describes what an indicator is doing. It does not tell
 anyone what to buy or sell.
