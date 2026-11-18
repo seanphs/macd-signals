@@ -37,9 +37,14 @@ const RSI_OPTS = {
   all: [[0, 'any']],
 };
 const RSI_DEFAULT = {valley: 40, recover: 40, peak: 60, all: 0};
-// The last four are the condition filters (docs/COMBOS.md): 200-day average, RSI lately, heavy volume, past year.
+// ma, rsil, heavy and year are the condition filters (docs/COMBOS.md): 200-day average, RSI lately,
+// heavy volume, past year. peg is the PEG filter (docs/VALUATION.md): 0 = any, else "under" that value.
 const SCREEN_DEFAULTS = {show: 'valley', stage: 0, rsi: 40, within: 10, below: 0, group: 'all', choppy: true, notmine: false,
-  ma: 'any', rsil: 'any', heavy: false, year: 'any'};
+  ma: 'any', rsil: 'any', heavy: false, year: 'any', peg: 0};
+const PEG_LIMITS = [0, 1, 1.5, 2];                // the PEG filter's choices (index.html has the labels)
+// P/E and PEG (docs/VALUATION.md): Yahoo's latest values for a stock, one each, not one per day,
+// so the day picker does not change them.
+const VAL_NOTE = 'From Yahoo Finance\'s Statistics page: the latest value, not one per day, so the day picker does not change it.';
 // Holding details (localStorage "macd-holdings": shares, cost, purchase date, sell target and
 // trailing stop per holding; all optional, never in the page address). Field key and column label.
 const HOLD_FIELDS = [['shares', 'Shares'], ['cost', 'Avg cost'], ['date', 'Bought'], ['target', 'Sell target'], ['trail', 'Trailing stop %']];
@@ -484,6 +489,7 @@ function row(sym, day) {  // everything the page shows for one ticker on one day
     stale: f.dates[i] !== day || indexStale(sym),
     group: isHolding(sym) ? 'holdings' : 'watch',
     cond: condsAt(f, i, f.dates[i]),  // where the ticker stands on its bar (docs/COMBOS.md)
+    val: valFrom(f.val),              // Yahoo's latest P/E and PEG, whatever the day (docs/VALUATION.md)
   };
 }
 function hasDir(r, dir) { return r.sigs.some(s => s.dir === dir); }
@@ -834,6 +840,42 @@ function comboTableHTML() {
     rows.map(cb => `<tr><td>${esc(cb.label)}</td><td class="num">${esc(fmt(cb.dev, 2))}</td><td class="num">${esc(fmt(cb.hold, 2))}</td></tr>`).join('')}</tbody></table>`;
 }
 
+// ---- P/E and PEG (docs/VALUATION.md) -------------------------------------
+// Yahoo's latest trailing P/E and PEG ratio, one value each per stock. {pe, peg, date}: a field is
+// null (date '') when the file has none: funds, indexes, companies with losses or without an
+// analysts' growth estimate, and files written before the values existed.
+function valFrom(o) {
+  const v = {pe: null, peg: null, date: ''};
+  if (!o || typeof o !== 'object') return v;
+  if (isNum(o.pe)) v.pe = o.pe;
+  if (isNum(o.peg)) v.peg = o.peg;
+  if (isoDay(o.date)) v.date = o.date;
+  return v;
+}
+// A P/E or a PEG of zero or less says nothing about price against earnings or growth; it is shown
+// as "n/m" (not meaningful), never matches the PEG filter and sorts with the missing values.
+function valUsable(x) { return isNum(x) && x > 0; }
+function fmtPE(v) { return valUsable(v) ? v.toFixed(v >= 100 ? 0 : 1) : isNum(v) ? 'n/m' : '–'; }
+function fmtPEG(v) { return valUsable(v) ? v.toFixed(2) : isNum(v) ? 'n/m' : '–'; }
+function valTitle(v, k) {
+  const x = v[k], name = k === 'pe' ? 'P/E' : 'PEG';
+  if (!isNum(x)) return k === 'pe' ? 'Yahoo has no P/E for this ticker: funds and indexes have none, nor do companies without earnings.'
+    : 'Yahoo has no PEG for this ticker: funds and indexes have none, nor do companies without earnings or without an analysts\' growth estimate.';
+  if (x <= 0) return `${name} ${x}: not meaningful (earnings or expected growth at or below zero).`;
+  return `${name} ${x}${v.date ? ', as of ' + v.date : ''}. ${VAL_NOTE}`;
+}
+function valCell(v, k) { return `<td class="num" title="${esc(valTitle(v, k))}">${k === 'pe' ? fmtPE(v.pe) : fmtPEG(v.peg)}</td>`; }
+// The P/E and PEG columns of a table: shown only when some row has a value.
+const VAL_COLS = [
+  ['pe', 'P/E', 'Price / earnings: the close divided by the last 12 months\' earnings per share. ' + VAL_NOTE],
+  ['peg', 'PEG', 'The P/E divided by the earnings growth analysts expect, in percent a year. ' + VAL_NOTE]];
+function valCols(rows) { return rows.some(r => r.val && (isNum(r.val.pe) || isNum(r.val.peg))) ? VAL_COLS : []; }
+// The one-line summary on the Charts tab; '' when Yahoo has neither value.
+function valText(v) {
+  if (!isNum(v.pe) && !isNum(v.peg)) return '';
+  return `P/E ${fmtPE(v.pe)}, PEG ${fmtPEG(v.peg)} <span class="sub" title="${esc(VAL_NOTE)}">(Yahoo${v.date ? ', as of ' + esc(v.date) : ''})</span>`;
+}
+
 function rank(r) {  // peaks first, then valleys, then higher stage, then closeness to the high
   const p = topSignal(r.sigs, 'PEAK'), v = topSignal(r.sigs, 'VALLEY');
   if (p) return [0, -p.stage, r.pct];
@@ -919,7 +961,9 @@ function sortRows(rows, key, days) {
     recent: recentCount(r, days), default: rank(r),
     // the holding-details columns; a missing value ("–") sorts last whichever way the column goes
     value: p.value, weight: p.weight, gain: p.gainPct, target: p.toTarget, stop: p.toStop, held: p.heldDays, spy: p.vsSpy1m,
-    record: recordSort(r)})[s.col]; };
+    record: recordSort(r),
+    // P/E and PEG: a missing or not-meaningful value sorts last, like the other missing values
+    pe: valUsable(r.val.pe) ? r.val.pe : null, peg: valUsable(r.val.peg) ? r.val.peg : null})[s.col]; };
   rows.sort((a, b) => {
     const x = val(a), y = val(b);
     if ((x == null) !== (y == null)) return x == null ? 1 : -1;
@@ -928,20 +972,23 @@ function sortRows(rows, key, days) {
   });
   return rows;
 }
-// Table header cells for a sortable table: cols is [[column key, label], ...], key names the SORT entry.
-// The label is a real button so the header can be sorted from the keyboard as well as by mouse.
+// Table header cells for a sortable table: cols is [[column key, label, optional explanation], ...],
+// key names the SORT entry. The label is a real button so the header can be sorted from the
+// keyboard as well as by mouse; the explanation, when given, is the header's hover text.
 function sortHeaders(cols, key) {
   const sort = SORT[key];
-  return cols.map(([k, label]) => `<th class="${sort.col === k ? 'sorted ' + (sort.asc ? 'asc' : '') : ''}"${sort.col === k ? ` aria-sort="${sort.asc ? 'ascending' : 'descending'}"` : ''}><button type="button" class="sorth" data-key="${key}" data-col="${k}" title="Sort by ${label}">${label}</button></th>`).join('');
+  return cols.map(([k, label, about]) => `<th class="${sort.col === k ? 'sorted ' + (sort.asc ? 'asc' : '') : ''}"${sort.col === k ? ` aria-sort="${sort.asc ? 'ascending' : 'descending'}"` : ''}><button type="button" class="sorth" data-key="${key}" data-col="${k}" title="${esc(about ? about + ' Click to sort.' : 'Sort by ' + label)}">${label}</button></th>`).join('');
 }
 function rsiCell(r) { return `<td class="num">${isNum(r.rsi) ? r.rsi.toFixed(0) : '–'}<span class="bar"><i class="${rsiClass(r.rsi)}" style="width:${isNum(r.rsi) ? r.rsi.toFixed(1) : 0}%"></i></span></td>`; }
 function pctCell(r) { return `<td class="num">${fmtPct(r.pct)}<span class="bar"><i style="width:${Math.max(0, 100 - r.pct).toFixed(1)}%"></i></span></td>`; }
 function tableHTML(rows, key, days, extra) {
-  // extra: the holding-details columns (holdCols), placed after "% below 1-yr high"; none for the watch table.
+  // extra: the holding-details columns (holdCols), placed after "% below 1-yr high" and the P/E and
+  // PEG columns (when some row has a value); none for the watch table.
   extra = extra || [];
+  const vcols = valCols(rows);
   const cols = [
     ['symbol', 'Ticker'], ['name', 'Name'], ['today', 'Signal'], ['macd', 'MACD vs signal'], ['hist', `Histogram (${rangeLabel()})`],
-    ['close', 'Close'], ['rsi', 'RSI'], ['off', '% below 1-yr high']].concat(extra, [['recent', `Recent (${rangeLabel()})`]]);
+    ['close', 'Close'], ['rsi', 'RSI'], ['off', '% below 1-yr high']].concat(vcols, extra, [['recent', `Recent (${rangeLabel()})`]]);
   // The Conditions column (not sortable) sits right after Signal.
   const ths = sortHeaders(cols.slice(0, 3), key) + COND_TH + sortHeaders(cols.slice(3), key);
   const body = rows.map(r => {
@@ -957,6 +1004,7 @@ function tableHTML(rows, key, days, extra) {
       <td class="num">${fmtClose(r.close)}</td>
       ${rsiCell(r)}
       ${pctCell(r)}
+      ${vcols.map(([k]) => valCell(r.val, k)).join('')}
       ${extra.map(([k]) => holdCell(r, k, S.day)).join('')}
       <td>${strip(d => eventsOn(r.f, d), days, S.rangeN)}</td>
     </tr>`;
@@ -1036,8 +1084,12 @@ function renderDash() {
   // holding-details columns follow it.
   const recordCol = hold.some(r => r.rec) ? [['record', 'Peak record (10d)']] : [];
   if (!recordCol.length && SORT.holdings.col === 'record') SORT.holdings = {col: 'off', asc: true};  // the sorted column went away: back to the default order
+  // The same when the P/E and PEG columns go away (no row in the table has a value).
+  const valGone = (rs, key, dflt) => { if (!valCols(rs).length && ['pe', 'peg'].includes(SORT[key].col)) SORT[key] = dflt; };
+  valGone(hold, 'holdings', {col: 'off', asc: true});
   $('holdings').innerHTML = hold.length ? tableHTML(sortRows(hold.slice(), 'holdings', days), 'holdings', days, recordCol.concat(holdCols(hold))) : '<div class="empty">No holdings with data. Add some on the My list tab.</div>';
   const wrows = $('allwatch').checked ? watch.slice() : whits.slice();
+  valGone(wrows, 'watch', {col: 'default', asc: true});
   $('watch').innerHTML = wrows.length ? tableHTML(sortRows(wrows, 'watch', days), 'watch', days)
     : (watch.length ? '<div class="empty">No watchlist signals on this day.</div>' : '<div class="empty">No watch tickers with data.</div>');
   // A ticker whose history starts after the selected day has no row; say so under its own table.
@@ -1124,7 +1176,8 @@ function renderChart() {
   // The 200-day average of the close (docs/COMBOS.md); an empty list for a file without it.
   const Ma = arrOf(f, 'sma200') ? f.sma200.slice(start, end) : [];
   const n = D.length;
-  $('chartmeta').innerHTML = `Close ${fmtClose(r.close)}, RSI ${isNum(r.rsi) ? r.rsi.toFixed(1) : '–'}, ${fmtPct(r.pct)} below 1-yr high, MACD ${fmt(r.macd)} / signal ${fmt(r.signal)} / histogram ${fmt(r.hist)}${r.weak ? ' (choppy)' : ''}${staleBadge(r)}`;
+  const vt = valText(r.val);  // Yahoo's latest P/E and PEG, when it has them (docs/VALUATION.md)
+  $('chartmeta').innerHTML = `Close ${fmtClose(r.close)}, RSI ${isNum(r.rsi) ? r.rsi.toFixed(1) : '–'}, ${fmtPct(r.pct)} below 1-yr high, MACD ${fmt(r.macd)} / signal ${fmt(r.signal)} / histogram ${fmt(r.hist)}${r.weak ? ' (choppy)' : ''}${vt ? ', ' + vt : ''}${staleBadge(r)}`;
 
   const marks = {};
   D.forEach(d => { const e = eventsOn(f, d); if (e.length) marks[d] = e; });
@@ -1237,6 +1290,7 @@ function cleanScreenF(o) {
   if (['any', 'lo', 'hi'].includes(o.rsil)) f.rsil = o.rsil;
   if (typeof o.heavy === 'boolean') f.heavy = o.heavy;
   if (['any', 'strong', 'weak'].includes(o.year)) f.year = o.year;
+  if (PEG_LIMITS.includes(+o.peg)) f.peg = +o.peg;  // the PEG filter (docs/VALUATION.md)
   return f;
 }
 function readStoredScreen() { try { return cleanScreenF(JSON.parse(lsGet('macd-screen') || 'null')); } catch (e) { return cleanScreenF(null); } }
@@ -1258,6 +1312,7 @@ function syncScreenControls() {
   $('sc-rsil').value = F.rsil;
   $('sc-heavy').checked = F.heavy;
   $('sc-year').value = F.year;
+  $('sc-peg').value = String(F.peg);
   // The Combination select is not stored: it shows a combination whenever the filters equal its
   // settings exactly, Custom otherwise; with a combination shown, its test result sits under the filters.
   const cb = comboOfFilters(F);
@@ -1270,7 +1325,7 @@ function readScreenControls() {
     // Until screener.json is in, the Group select only has "All groups"; keep the remembered group then.
     below: $('sc-below').value, group: screenGroups().length ? $('sc-group').value : S.screenF.group,
     choppy: $('sc-choppy').checked, notmine: $('sc-mine').checked,
-    ma: $('sc-ma').value, rsil: $('sc-rsil').value, heavy: $('sc-heavy').checked, year: $('sc-year').value});
+    ma: $('sc-ma').value, rsil: $('sc-rsil').value, heavy: $('sc-heavy').checked, year: $('sc-year').value, peg: $('sc-peg').value});
   storeScreen();
   renderScreen();
 }
@@ -1316,6 +1371,7 @@ function screenRow(sym, e) {
     macdDir: e.macd_dir, sigs: sigsOf(e.today), recent, cross,
     listed: listed().includes(sym), holding: isHolding(sym),
     cond: condFromJSON(e.cond),  // conditions on the ticker's last bar (docs/COMBOS.md); all unknown in an older screener.json
+    val: valFrom({pe: e.pe, peg: e.peg, date: e.val_date}),  // Yahoo's latest P/E and PEG (docs/VALUATION.md); none in an older screener.json
   };
 }
 function screenMatch(r, F) {
@@ -1344,6 +1400,9 @@ function screenMatch(r, F) {
   if (F.rsil === 'hi' && c.rsi_hi !== true) return false;
   if (F.heavy && c.heavy !== true) return false;
   if (F.year !== 'any' && c.year !== F.year) return false;
+  // PEG under the limit; a ticker without a usable PEG (a fund, no earnings, no growth estimate,
+  // or zero or less) never matches a limit.
+  if (F.peg && !(valUsable(r.val.peg) && r.val.peg < F.peg)) return false;
   return true;
 }
 // Default order: strongest stage first, then RSI (lowest first for valleys, highest first for
@@ -1363,8 +1422,14 @@ function sortScreen(rows, F) {
     macd: (r.side === 'above' ? 0 : 2) + (r.trend === 'rising' ? 0 : 1),
     close: isNum(r.close) ? r.close : -1, rsi: isNum(r.rsi) ? r.rsi : -1, off: r.pct,
     chg1: isNum(r.chg1) ? r.chg1 : -Infinity, chg3: isNum(r.chg3) ? r.chg3 : -Infinity,
-    recent: Object.keys(r.recent).filter(d => r.recent[d].length).length, default: screenRank(r, F)})[s.col];
-  rows.sort((a, b) => (s.asc ? 1 : -1) * cmpVal(val(a), val(b)) || a.sym.localeCompare(b.sym));
+    recent: Object.keys(r.recent).filter(d => r.recent[d].length).length, default: screenRank(r, F),
+    // P/E and PEG: missing or not meaningful is null and sorts last whichever way the column goes
+    pe: valUsable(r.val.pe) ? r.val.pe : null, peg: valUsable(r.val.peg) ? r.val.peg : null})[s.col];
+  rows.sort((a, b) => {
+    const x = val(a), y = val(b);
+    if ((x == null) !== (y == null)) return x == null ? 1 : -1;
+    return (s.asc ? 1 : -1) * cmpVal(x, y) || a.sym.localeCompare(b.sym);
+  });
   return rows;
 }
 // The last 21 trading days ending on the screener's last bar. screener.json carries no calendar,
@@ -1383,7 +1448,8 @@ function crossChip(c) {
 }
 function screenTableHTML(rows, days, F) {
   const cols = [['symbol', 'Ticker'], ['name', 'Name'], ['group', 'Group'], ['signal', 'Signal'], ['macd', 'MACD vs signal'],
-    ['close', 'Close'], ['rsi', 'RSI'], ['off', '% below 1-yr high'], ['chg1', '1M change'], ['chg3', '3M change'], ['recent', `Recent (${SCREEN_BARS}D)`]];
+    ['close', 'Close'], ['rsi', 'RSI'], ['off', '% below 1-yr high'], ['chg1', '1M change'], ['chg3', '3M change']].concat(
+    VAL_COLS, [['recent', `Recent (${SCREEN_BARS}D)`]]);
   const ths = sortHeaders(cols.slice(0, 4), 'screen') + COND_TH + sortHeaders(cols.slice(4), 'screen') + '<th></th>';
   const body = rows.map(r => {
     const t = r.sigs.length ? r.sigs.slice().sort((a, b) => a.stage - b.stage).map(badge).join(' ') : '<span class="sub">–</span>';
@@ -1403,6 +1469,7 @@ function screenTableHTML(rows, days, F) {
       ${pctCell(r)}
       <td class="num">${fmtChg(r.chg1)}</td>
       <td class="num">${fmtChg(r.chg3)}</td>
+      ${valCell(r.val, 'pe')}${valCell(r.val, 'peg')}
       <td>${strip(d => r.recent[d] || [], days, SCREEN_BARS)}</td>
       <td>${add}</td>
     </tr>`;
@@ -1468,12 +1535,12 @@ function renderEditor() {
 function fmtGenerated(s) { return String(s || '').replace('T', ' ').replace(/(:\d\d)(\.\d+)?Z$/, '$1 UTC'); }
 function renderFooter() {
   const tail = 'This page describes what an indicator is doing. It is not financial advice.';
-  if (!S.index) { $('footer').innerHTML = `<p>Prices from Yahoo Finance, updated nightly. ${tail}</p>`; return; }
+  if (!S.index) { $('footer').innerHTML = `<p>Prices, P/E and PEG from Yahoo Finance, updated nightly. ${tail}</p>`; return; }
   const ix = S.index;
   const failed = ix.failed && typeof ix.failed === 'object' ? Object.keys(ix.failed).length : 0;
   const stale = Object.keys(ix.tickers).filter(s => ix.tickers[s] && ix.tickers[s].stale).length;
   const count = isNum(ix.count) ? ix.count : Object.keys(ix.tickers).length;
-  $('footer').innerHTML = `<p>Prices from Yahoo Finance, updated nightly. Data as of ${esc(ix.last_bar || '?')}, generated ${esc(fmtGenerated(ix.generated))}. ${count} tickers; ${failed} failed, ${stale} stale tonight. ${tail}</p>`;
+  $('footer').innerHTML = `<p>Prices, P/E and PEG from Yahoo Finance, updated nightly. Data as of ${esc(ix.last_bar || '?')}, generated ${esc(fmtGenerated(ix.generated))}. ${count} tickers; ${failed} failed, ${stale} stale tonight. ${tail}</p>`;
   const p = ix.params || {};
   $('params-note').textContent = `Settings: MACD ${p.fast || 12}/${p.slow || 26}/${p.signal || 9}, RSI ${p.rsi || 14}, "choppy" below ${isNum(p.weak_pct) ? p.weak_pct : 0.25}% of price.`;
 }
@@ -1553,7 +1620,7 @@ document.addEventListener('click', e => {
   }
 });
 ['sc-show', 'sc-stage', 'sc-rsi', 'sc-within', 'sc-below', 'sc-group', 'sc-choppy', 'sc-mine',
-  'sc-ma', 'sc-rsil', 'sc-heavy', 'sc-year'].forEach(id => $(id).addEventListener('change', readScreenControls));
+  'sc-ma', 'sc-rsil', 'sc-heavy', 'sc-year', 'sc-peg'].forEach(id => $(id).addEventListener('change', readScreenControls));
 $('sc-combo').addEventListener('change', e => chooseScreenCombo(e.target.value));
 $('combosel').addEventListener('change', e => {
   S.combo = comboById(e.target.value) ? e.target.value : null;

@@ -3,7 +3,7 @@
 A small website that shows what two common stock-chart indicators, **MACD** and **RSI**, are
 doing for the tickers you choose. Every weeknight a free GitHub job downloads two years of daily
 prices for about 800 tickers from Yahoo Finance, works out the numbers and the signals for the
-latest year, and publishes them to the site. Each visitor keeps their own list of tickers in their own browser.
+latest year, adds each stock's P/E and PEG from Yahoo, and publishes them to the site. Each visitor keeps their own list of tickers in their own browser.
 There is nothing to install, no login and no cost.
 
 **Screener.** Besides your own list, the **Screener** tab shows every ticker in the data set
@@ -60,6 +60,17 @@ advice and not a forecast. (The 200-day average and the past-year return need mo
 of prices, which is why the nightly job downloads two years; the page still shows the latest
 year.)
 
+**P/E and PEG.** For every stock, the nightly job also fetches the **P/E** (price divided by the
+last 12 months' earnings) and the **PEG** (the P/E divided by the yearly earnings growth analysts
+expect) that Yahoo Finance shows on the stock's Statistics page. They appear as **P/E** and
+**PEG** columns in the Dashboard's holdings and watchlist tables and in the Screener (which also
+gets a **PEG** filter: under 1, 1.5 or 2), and in the line above each chart. PEG is most useful
+for stocks with a high P/E: a P/E of 40 with 40% expected growth gives the same PEG of 1.0 as a
+P/E of 10 with 10% growth. They are the latest values only, not one per day, so the day picker
+does not change them. Funds, indexes and companies without earnings have none. The growth figure is
+a forecast and is often wrong. Sites also compute PEG in different ways, so another site's number,
+or even another Yahoo number, can be far off this one. These are valuation numbers, not signals.
+
 **This site is not financial advice.** It describes what an indicator is doing. It does not tell
 anyone what to buy or sell.
 
@@ -79,8 +90,9 @@ not need anything. [SETUP.md](SETUP.md) walks through creating the account and e
    `.github/workflows/update.yml`. The job runs `fetch_data.py`, which downloads two years of
    daily prices for each ticker from Yahoo Finance, computes MACD, RSI and the signals for the
    latest year (exactly as from a one-year download), uses the longer history only for the
-   200-day average, the past-year return and the volume comparison, and writes a
-   one-line-per-ticker summary of the latest day for the Screener (`screener.json`).
+   200-day average, the past-year return and the volume comparison, asks Yahoo for each
+   stock's latest P/E and PEG, and writes a one-line-per-ticker summary of the latest day for the
+   Screener (`screener.json`).
 3. The job publishes the `site` folder together with the computed data using **GitHub Pages**,
    GitHub's free website hosting. The site address looks like
    `https://<your-username>.github.io/macd-signals/`.
@@ -124,6 +136,7 @@ Details worth knowing:
 | `docs/HOLDINGS.md` | The same for the Holding details table and the portfolio columns it adds to the Dashboard. |
 | `docs/TRACKRECORD.md` | The same for the Track record section on the Charts tab and the Peak record column. |
 | `docs/COMBOS.md` | The same for the condition chips, the Highlight menu, the Screener's condition filters and combinations, and the two-year download. |
+| `docs/VALUATION.md` | The same for the P/E and PEG columns, the Screener's PEG filter and where Yahoo's numbers come from. |
 
 A "repository" is GitHub's word for one project's folder. A "commit" is a saved change with a
 short note attached. A "workflow" is a job GitHub runs for you.
@@ -203,6 +216,11 @@ Anyone can open the site address. Nobody needs a GitHub account to view it.
   **Highlight** menu and the Screener's condition filters and **Combination** menu pair them with
   confirmed signals; in the site's ten-year test no combination did better than an ordinary day.
   On the **Charts** tab the thin dashed line on the price panel is the 200-day average.
+- **P/E and PEG** (columns in the Dashboard tables and the Screener, and the line above each
+  chart) are Yahoo Finance's latest values for each stock, as its Statistics page shows them.
+  Hover a value for its date. The Screener's **PEG** filter keeps only stocks with a PEG under
+  the limit you choose. A dash means Yahoo has none (funds, indexes, companies without
+  earnings); "n/m" means earnings or expected growth are at or below zero.
 - **Info** explains every term on the page in plain language. Start there if MACD and RSI are new
   to you.
 - **Holding details** (on the **My list** tab) adds your own numbers to the Dashboard. With
@@ -236,6 +254,7 @@ on its Summary page and the red error line under it.
 | The Actions tab says the scheduled workflow was disabled, or there has been no run for several days. | GitHub switches off schedules after 60 days without activity in the repository. The job prevents this by saving the date every night, but if it was failing or GitHub was changed, this can still happen. | Click **Update prices and publish** in the left column, click **Enable workflow**, then run the job by hand. |
 | The page says "The data has not been published yet, or the nightly job has not run. See SETUP.md." | No run has finished successfully yet, or Pages is not set up. | Do steps 4 to 6 of SETUP.md. |
 | The Screener tab says "The screener data has not been published yet; it appears after the next nightly run." | The nightly job that ran last did not write `screener.json` (the log then has a line "screener.json was not written"), or the site was published before the Screener existed. | Run the job by hand once. If the log says "screener.json was not written" again, copy that line and ask the assistant. The rest of the page is unaffected. |
+| The P/E and PEG columns show dashes for every stock, or the run's log has the line "Warning: no stock got a P/E or PEG from Yahoo tonight". | Yahoo refused those requests that night, or (if the log shows "HTTP Error 404" for every stock, night after night) Yahoo renamed the data series. Prices and signals are unaffected; stocks keep their previous values for up to 31 days. | If it lasts more than a night or two, copy the log lines and ask the assistant; `docs/VALUATION.md` says how to find the new names. |
 | The page shows a banner "Data last updated <date>. The nightly job may have stopped". | The last successful run is more than three days old. | Check the Actions tab for red runs and follow the rows above. |
 | The page shows an older date than you expect in the footer. | Your browser is showing a saved copy of the page, or the job has not run yet. | Hold Ctrl and press F5 (a "hard refresh", which makes the browser re-download the page). Then check the Actions tab. Publishing can take up to 10 minutes after a run finishes. |
 | The site address shows "404" or "There isn't a GitHub Pages site here". | Pages is not switched on, no run has finished yet, or the address is mistyped. | Check the address: `https://<your-username>.github.io/macd-signals/`. Under **Settings** → **Pages** the page should say "Your site is live at". |

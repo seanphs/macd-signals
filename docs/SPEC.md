@@ -44,7 +44,7 @@ under `https://<user>.github.io/<repo>/`. Local testing: `python -m http.server 
 
 ```
 python -I fetch_data.py [--universe universe.txt] [--out site/data] [--only T1,T2,...]
-                        [--limit N] [--sleep 0.25] [--range 2y]
+                        [--limit N] [--sleep 0.25] [--range 2y] [--no-valuation]
 ```
 
 - Reads `universe.txt` with `read_universe(path)`: one ticker per line; `#` starts a comment;
@@ -102,6 +102,12 @@ python -I fetch_data.py [--universe universe.txt] [--out site/data] [--only T1,T
   line `screener: N tickers, M left out`; if that fails it prints
   `screener.json was not written: <error>` and carries on, because `index.json` and the
   summary line matter more.
+- P/E and PEG (`docs/VALUATION.md`): for each freshly fetched ticker whose chart says it is a
+  stock (`meta.instrumentType` `EQUITY`), one more request to Yahoo's fundamentals-timeseries
+  service for the Trailing P/E and PEG Ratio its Statistics page shows, one try, 10 s timeout;
+  on failure the previous file's values are kept (if dated within 31 days). After 10 failures in a
+  row no more are asked that night. `--no-valuation` skips the requests. One log line counts the
+  outcomes (`P/E and PEG: fetched N, ...`).
 - Prints one progress line per 50 tickers and a final summary:
   `fetched N  stale M  failed K  last_bar YYYY-MM-DD  elapsed Ss`.
 - Python 3.9+, standard library only, no network other than Yahoo.
@@ -120,7 +126,8 @@ python -I fetch_data.py [--universe universe.txt] [--out site/data] [--only T1,T
  "events": {"2026-10-28": [{"dir": "PEAK", "stage": 3, "detail": "MACD crossed below signal line"}]},
  "sma200": [224.3975, "..."],
  "mom":    [null, null, 18.52, "..."],
- "volx":   [1.02, "..."]}
+ "volx":   [1.02, "..."],
+ "val":    {"pe": 39.67, "peg": 4.02, "date": "2026-11-13"}}
 ```
 
 `dates` and every array have the same length (ascending, completed daily bars of the published
@@ -134,7 +141,9 @@ day's volume over the mean volume of the 50 bars before it (2 decimals). Each is
 history or input is missing, so a ticker listed less than about a year ago has mostly null
 `sma200` / `mom`. A stale file is simply the previous night's file left in place, and a file
 written before 2026-11-07 has none of the three arrays; the page and `screener.json` treat a
-missing array as all null.
+missing array as all null. `val` is Yahoo's latest trailing P/E and PEG ratio (one value each, not
+a series; null fields where Yahoo has none) and `null` for a ticker that is not a stock; a file
+written before 2026-11-18 has no `val`, which counts as null (`docs/VALUATION.md`).
 
 ### site/data/index.json
 
@@ -160,9 +169,10 @@ The latest trading day for every ticker that has a file (fresh or stale): close,
 trio, choppiness, % below the one-year high, 1M / 3M change, the day's events, the events of
 the last 21 bars and the most recent confirmed crossover, plus the ticker's `group` from
 `universe.txt` and `cond`, the ticker's conditions on its last bar (200-day average, RSI
-lately, heavy volume lately, past year; rules in `docs/COMBOS.md`). Same `generated` /
-`last_bar` / `params` as `index.json`. The exact shape and every rule are in
-`docs/SCREENER.md` and, for `cond`, `docs/COMBOS.md`.
+lately, heavy volume lately, past year; rules in `docs/COMBOS.md`), and `pe`, `peg`, `val_date`
+from the file's `val` (`docs/VALUATION.md`). Same `generated` / `last_bar` / `params` as
+`index.json`. The exact shape and every rule are in `docs/SCREENER.md` and, for `cond`,
+`docs/COMBOS.md`.
 
 ## universe.txt
 
@@ -306,6 +316,10 @@ Dashboard tab only) that marks matching cards and rows (class `hl`, a "Matches" 
 a line under the stats with the match count and the combination's test result. With None the
 Dashboard shows no highlight.
 
+P/E and PEG (`docs/VALUATION.md`): sortable **P/E** and **PEG** columns after "% below 1-yr high"
+in the All holdings and Watchlist tables, each table showing them only when one of its rows has a
+value; Yahoo's latest values, not per day, so the day picker does not change them.
+
 ### Screener tab
 
 Between Dashboard and Charts (tab order: Dashboard, Screener, Charts, Info, My list). Every
@@ -316,7 +330,8 @@ and an Add to watch button per row. Filters are remembered in localStorage `macd
 file is loaded the first time the tab is shown. Everything about it, including the Info tab
 additions, is specified in `docs/SCREENER.md`; the condition filters (200-day average, RSI
 lately, Heavy volume lately, Past year), the **Combination** preset select, its test note and
-the **Conditions** column are specified in `docs/COMBOS.md`.
+the **Conditions** column are specified in `docs/COMBOS.md`; the **P/E** and **PEG** columns and
+the **PEG** filter in `docs/VALUATION.md`.
 
 ### Charts tab
 
@@ -328,7 +343,8 @@ has it, the 200-day average `sma200` as a thin dashed line in the `--ma` color; 
 blue, signal line orange, histogram bars green/red, dotted zero line, markers on the MACD line on
 days a signal fired, colored by stage), RSI (line with dotted 30 / 70 guides). Hover shows a
 crosshair with date, close, the 200-day average (when present), MACD, signal, histogram, RSI.
-Clicking a ticker anywhere on the Dashboard tab opens it here.
+Clicking a ticker anywhere on the Dashboard tab opens it here. The line above the chart ends with
+the stock's P/E and PEG and their date when Yahoo has them (`docs/VALUATION.md`).
 
 - Under the chart box, a "Track record for <TICKER>" section: a table of what the close did 5,
   10 and 20 trading days after each past signal, one row per stage group with "Hit rate" (as
@@ -347,12 +363,12 @@ site" section: data from Yahoo Finance fetched once a night by a free GitHub job
 the last completed trading day, your list stays in your browser, not financial advice. The
 Screener's glossary entries are in `docs/SCREENER.md`, the Holding details entries (Holding
 details, Value / Weight / Gain since cost, Sell target, Trailing stop, Held / long-term,
-vs SPY (1M)) in `docs/HOLDINGS.md`, and the Conditions and Highlight and combinations entries
-(with the test table) in `docs/COMBOS.md`.
+vs SPY (1M)) in `docs/HOLDINGS.md`, the Conditions and Highlight and combinations entries
+(with the test table) in `docs/COMBOS.md`, and the P/E and PEG entries in `docs/VALUATION.md`.
 
 ### Footer
 
-"Prices from Yahoo Finance, updated nightly. Data as of <last_bar>, generated <generated>.
+"Prices, P/E and PEG from Yahoo Finance, updated nightly. Data as of <last_bar>, generated <generated>.
 <count> tickers; <n> failed, <m> stale tonight. This page describes what an indicator is doing.
 It is not financial advice."
 

@@ -69,9 +69,12 @@ matter more). `--only` runs write it too (over the subset). Exact shape:
       "recent": {"2026-10-28": [["VALLEY", 1]], ...},
                                   // events on the last 21 bars INCLUDING last_bar, same [dir, stage] form,
                                   // only days that had an event (so `today` == recent[last_bar] or [])
-      "cross": {"dir": "VALLEY", "date": "2026-11-03", "days": 2}
+      "cross": {"dir": "VALLEY", "date": "2026-11-03", "days": 2},
                                   // the most recent stage-3 event in the file, days = trading bars since
                                   // it (0 = on last_bar); null if none in the file
+      "pe": 39.67, "peg": 4.02, "val_date": "2026-11-13"
+                                  // Yahoo's latest trailing P/E and PEG from the file's "val", null
+                                  // where there is none (docs/VALUATION.md)
     }, ...
   }
 }

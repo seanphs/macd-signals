@@ -6,10 +6,12 @@ three-stage peak/valley signals for every day of that year, computed on that yea
 exactly as a one-year download would give them. The year before it is only there for three
 descriptive numbers that need a longer look back: the 200-day average of the close, the
 past-year return skipping the latest month, and the day's volume against its 50-day average
-(docs/COMBOS.md). It writes one JSON file per ticker plus index.json and screener.json into
-site/data/. The web page reads those files; nothing else is needed. screener.json is a
-one-line-per-ticker summary of the latest trading day (the Screener tab shows it); its exact
-contents are described in docs/SCREENER.md and docs/COMBOS.md.
+(docs/COMBOS.md). For each stock it also asks Yahoo for the latest trailing P/E and PEG ratio its
+Statistics page shows (docs/VALUATION.md), one value each, not a history; a failure there only
+means the stock keeps the values its previous file had. It writes one JSON file per ticker plus
+index.json and screener.json into site/data/. The web page reads those files; nothing else is
+needed. screener.json is a one-line-per-ticker summary of the latest trading day (the Screener
+tab shows it); its exact contents are described in docs/SCREENER.md and docs/COMBOS.md.
 
 The math is copied unchanged from macd_scan.py, the daily scanner this page grew out of:
 same EMA seeding (simple average of the first n values), same MACD and RSI definitions,
@@ -39,7 +41,7 @@ a few tickers by hand; a run with --only always exits 0 and simply reports its c
 Standard library only (Python 3.9+). The only network traffic is to Yahoo Finance.
 
 Usage:  python -I fetch_data.py [--universe universe.txt] [--out site/data] [--only T1,T2,...]
-                                [--limit N] [--sleep 0.25] [--range 2y]
+                                [--limit N] [--sleep 0.25] [--range 2y] [--no-valuation]
 """
 import argparse
 import collections
@@ -91,6 +93,23 @@ RSI_LO, RSI_HI = 30, 70     # RSI under 30 / over 70
 HEAVY_X = 2                 # heavy volume = at least twice the 50-day mean
 MEDIAN_GROUP = "S&P 500"    # the group whose median past-year return splits strong from weak
 MEDIAN_MIN = 100            # a day gets a median only when at least this many tickers have a value
+# P/E and PEG (docs/VALUATION.md): the "Trailing P/E" and "PEG Ratio (current)" that Yahoo's own
+# Statistics page shows for each stock. They come from Yahoo's fundamentals-timeseries service,
+# which needs no login cookie, under the coded series names that page itself asks for:
+# EQMJM_TTM is the trailing P/E, EQLXT_TTM the PEG. (The same service's "trailingPegRatio",
+# also what quoteSummary calls pegRatio, is a different PEG that often disagrees with the page,
+# e.g. 4.4 against 37.5 for TSLA in Nov 2026; it is deliberately not used.) Asked only for
+# tickers whose chart says they are a stock (instrumentType EQUITY): funds, indexes, futures
+# and crypto have no earnings.
+VAL_URL = ("https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/{sym}"
+           "?symbol={sym}&type=EQMJM_TTM,EQLXT_TTM&period1={start}&period2={end}")
+VAL_TYPES = (("EQMJM_TTM", "pe"), ("EQLXT_TTM", "peg"))   # Yahoo's series name, the file's name
+VAL_CHECK_MIN = 20          # with this many stocks asked and not one value back, warn in the log
+VAL_DAYS = 31               # a value older than this many days counts as none (P/E moves with the price)
+# The values are extra. One try each with a short timeout, and after this many failures in a row
+# no more are asked for that night: every remaining stock keeps the values its previous file had.
+VAL_TIMEOUT = 10
+VAL_TROUBLE_LIMIT = 10
 
 
 class YahooBlocked(ValueError):
@@ -182,6 +201,59 @@ def fetch_chart(sym, range_="1y", attempts=ATTEMPTS, timeout=TIMEOUT):
         error = chart.get("error") or {}
         raise ValueError(error.get("description") or "Yahoo returned no data")
     return chart["result"][0]
+
+
+def fetch_valuation(sym, timeout=VAL_TIMEOUT, now=None):
+    """Yahoo's latest trailing P/E and PEG ratio for one stock, as its Statistics page shows them,
+    in one try (docs/VALUATION.md).
+
+    Returns parse_valuation()'s object. Raises on a network error, an HTTP error or an answer
+    that is not the expected JSON; the caller then keeps the previous file's values.
+    """
+    now = time.time() if now is None else now
+    url = VAL_URL.format(sym=urllib.parse.quote(sym, safe=""), start=int(now - VAL_DAYS * 86400),
+                         end=int(now + 86400))
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        try:
+            data = json.load(resp)
+        except json.JSONDecodeError:
+            raise YahooBlocked("Yahoo did not return data (blocked or unavailable)") from None
+    results = (data.get("timeseries") or {}).get("result") if isinstance(data, dict) else None
+    if not isinstance(results, list):
+        raise ValueError("Yahoo returned no P/E or PEG data")
+    cutoff = dt.datetime.fromtimestamp(now - VAL_DAYS * 86400, dt.timezone.utc).date().isoformat()
+    return parse_valuation(results, cutoff)
+
+
+def parse_valuation(results, cutoff):
+    """{"pe": .., "peg": .., "date": ..} from the "result" list of Yahoo's timeseries answer.
+
+    Each value is the newest point of its series dated on or after `cutoff` (an ISO date), rounded
+    to 2 decimals, or None when Yahoo has no such point (a company with losses has no P/E; one
+    without an analysts' growth estimate has no PEG). `date` is the newer of the two points'
+    dates, None when neither exists. Points that are not a finite number with an ISO date are
+    ignored.
+    """
+    out, dates = {"pe": None, "peg": None, "date": None}, []
+    for yahoo_name, key in VAL_TYPES:
+        best = None
+        for result in results:
+            meta = result.get("meta") if isinstance(result, dict) else None
+            if not isinstance(meta, dict) or yahoo_name not in (meta.get("type") or []):
+                continue
+            for point in result.get(yahoo_name) or []:
+                if not isinstance(point, dict):
+                    continue
+                day, raw = point.get("asOfDate"), (point.get("reportedValue") or {}).get("raw")
+                if (isinstance(day, str) and re.fullmatch(r"\d{4}-\d\d-\d\d", day) and day >= cutoff
+                        and is_num(raw) and (best is None or day > best[0])):
+                    best = (day, raw)
+        if best:
+            out[key] = round(best[1], 2) + 0.0
+            dates.append(best[0])
+    out["date"] = max(dates) if dates else None
+    return out
 
 
 QUOTE_FILLS = []   # bars whose close was taken from the closing quote (see completed_bars)
@@ -425,6 +497,26 @@ def cached_summary(path):
     return data["name"], data["dates"][-1]
 
 
+def previous_valuation(path, now=None):
+    """The "val" object of the ticker file left from an earlier run, or None when there is no
+    such file, it cannot be read, it has no usable values, or they are dated more than VAL_DAYS
+    days ago, so that weeks of failed requests never leave a P/E older than that on the page
+    (docs/VALUATION.md)."""
+    try:
+        val = json.loads(path.read_text(encoding="utf-8")).get("val")
+    except Exception:
+        return None
+    if not isinstance(val, dict) or not (is_num(val.get("pe")) or is_num(val.get("peg"))):
+        return None
+    now = time.time() if now is None else now
+    cutoff = dt.datetime.fromtimestamp(now - VAL_DAYS * 86400, dt.timezone.utc).date().isoformat()
+    if not isinstance(val.get("date"), str) or val["date"] < cutoff:
+        return None
+    return {"pe": val["pe"] if is_num(val.get("pe")) else None,
+            "peg": val["peg"] if is_num(val.get("peg")) else None,
+            "date": val["date"] if isinstance(val.get("date"), str) else None}
+
+
 def describe(e):
     """One plain line about why a ticker failed, for index.json and the log."""
     if isinstance(e, urllib.error.HTTPError):
@@ -570,6 +662,7 @@ def screener_entry(record, group=DEFAULT_GROUP, stale=False, weak_pct=WEAK_PCT, 
         return round((close / closes[-1 - bars_back] - 1) * 100, 1) + 0.0
 
     events = record.get("events") or {}
+    val = record.get("val") if isinstance(record.get("val"), dict) else {}
     recent = {}
     for day in dates[-RECENT_BARS:]:
         if day in events:
@@ -602,6 +695,11 @@ def screener_entry(record, group=DEFAULT_GROUP, stale=False, weak_pct=WEAK_PCT, 
         "recent": recent,
         "cross": cross,
         "cond": conditions_at(record, len(dates) - 1, mom_median),
+        # Yahoo's latest P/E and PEG (docs/VALUATION.md); null for funds, indexes, stocks Yahoo
+        # has none for, and files written before the values existed
+        "pe": val.get("pe") if is_num(val.get("pe")) else None,
+        "peg": val.get("peg") if is_num(val.get("peg")) else None,
+        "val_date": val.get("date") if isinstance(val.get("date"), str) else None,
     }
 
 
@@ -659,6 +757,9 @@ def main(argv=None):
                     help="how much history to ask Yahoo for (default 2y: the files cover the latest "
                          "year, but the 200-day average and the past-year return need more than a "
                          "year of bars; with 1y those two are mostly empty)")
+    ap.add_argument("--no-valuation", action="store_true",
+                    help="do not ask Yahoo for P/E and PEG; each stock keeps the values its previous "
+                         "file had (docs/VALUATION.md)")
     args = ap.parse_args(argv)
     started = time.time()
 
@@ -685,6 +786,38 @@ def main(argv=None):
     fetched = stale = 0
     trouble = 0            # fetch failures in a row that look like Yahoo being down
     out_of_time = False    # set once TIME_BUDGET has passed; no fetching after that
+    # P/E and PEG (docs/VALUATION.md): counted by outcome for one log line at the end
+    val_counts = collections.Counter()
+    val_state = {"trouble": 0, "off": bool(args.no_valuation)}
+
+    def valuation(sym, res, path, hurry):
+        """The "val" object for a freshly fetched stock: Yahoo's values, or the previous file's
+        when they cannot be fetched tonight; None for a ticker that is not a stock."""
+        if (res.get("meta") or {}).get("instrumentType") != "EQUITY":
+            val_counts["not a stock"] += 1
+            return None
+        if val_state["off"] or hurry:
+            kept = previous_valuation(path)
+            val_counts["kept from the previous file" if kept else "not asked"] += 1
+            return kept
+        time.sleep(args.sleep)  # the same pause as between tickers, so Yahoo sees no burst
+        try:
+            val = fetch_valuation(sym)
+        except Exception as e:
+            kept = previous_valuation(path)
+            val_counts["kept from the previous file" if kept else "failed"] += 1
+            val_state["trouble"] += 1
+            print(f"  {sym}: P/E and PEG not fetched ({describe(e)})"
+                  f"{' -> keeping the previous values' if kept else ''}", flush=True)
+            if val_state["trouble"] >= VAL_TROUBLE_LIMIT:
+                val_state["off"] = True
+                print(f"{VAL_TROUBLE_LIMIT} P/E and PEG requests in a row failed; not asking for "
+                      "more tonight. The remaining stocks keep their previous values.", flush=True)
+            return kept
+        val_state["trouble"] = 0
+        val_counts["fetched" if val["pe"] is not None or val["peg"] is not None else "none at Yahoo"] += 1
+        return val
+
     for i, sym in enumerate(requested, 1):
         if not SYMBOL_RE.match(sym):
             failed[sym] = "bad symbol"
@@ -711,6 +844,7 @@ def main(argv=None):
                     raise
                 trouble = 0
                 record = build_record(sym, res, now_utc())
+                record["val"] = valuation(sym, res, path, hurry)
                 write_json(path, record)
                 tickers[sym] = {"name": record["name"], "last_bar": record["dates"][-1], "stale": False}
                 fetched += 1
@@ -737,6 +871,14 @@ def main(argv=None):
     if QUOTE_FILLS:
         print(f"{len(QUOTE_FILLS)} tickers: the latest close was taken from Yahoo's closing quote "
               f"because the daily bar was still empty", flush=True)
+    if val_counts:
+        print("P/E and PEG: " + ", ".join(f"{k} {n}" for k, n in sorted(val_counts.items())), flush=True)
+    stocks = sum(n for k, n in val_counts.items() if k != "not a stock")
+    if not args.no_valuation and stocks >= VAL_CHECK_MIN and not val_counts["fetched"]:
+        # Not one stock got a value: Yahoo was blocking, or (an answer of HTTP 404 "No timeseries
+        # type(s) specified" for every stock) the series names in VAL_TYPES were renamed.
+        print("Warning: no stock got a P/E or PEG from Yahoo tonight; the lines above say why. "
+              "If it happens every night, see docs/VALUATION.md.", flush=True)
     last_bar = most_common(t["last_bar"] for t in tickers.values())
     generated = now_utc()
     params = {"fast": FAST, "slow": SLOW, "signal": SIG, "rsi": RSI_N, "weak_pct": WEAK_PCT}
